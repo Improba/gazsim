@@ -50,6 +50,7 @@
 <script setup lang="ts">
 import { computed, reactive, watch } from 'vue';
 import { useNetworkStore, type NodeDto } from 'src/stores/network';
+import { buildDemandPayload, sliderFromOverride, sliderMaxWithdrawal } from 'src/utils/demandOverrides';
 
 const props = withDefaults(
   defineProps<{
@@ -67,57 +68,64 @@ const emit = defineEmits<{
 const networkStore = useNetworkStore();
 const sliderValues = reactive<Record<string, number>>({});
 let publishTimer: ReturnType<typeof setTimeout> | null = null;
+let syncingFromModel = false;
 
 const adjustableNodes = computed(() =>
   networkStore.nodes.filter((node) => node.pressure_fixed_bar == null),
 );
 
 function getMaxWithdrawal(node: NodeDto): number {
-  if (node.flow_min_m3s != null && node.flow_min_m3s < 0) {
-    return Math.abs(node.flow_min_m3s);
+  return sliderMaxWithdrawal(node.flow_min_m3s, props.modelValue?.[node.id]);
+}
+
+function syncSlidersFromModel(): void {
+  if (publishTimer) {
+    clearTimeout(publishTimer);
+    publishTimer = null;
   }
-  return 20;
+  syncingFromModel = true;
+  const model = props.modelValue ?? {};
+  const validIds = new Set(adjustableNodes.value.map((node) => node.id));
+  for (const node of adjustableNodes.value) {
+    sliderValues[node.id] = sliderFromOverride(model[node.id]);
+  }
+  for (const key of Object.keys(sliderValues)) {
+    if (!validIds.has(key)) {
+      delete sliderValues[key];
+    }
+  }
+  syncingFromModel = false;
 }
 
 watch(
-  adjustableNodes,
-  (nodes) => {
-    const model = props.modelValue ?? {};
-    for (const node of nodes) {
-      if (sliderValues[node.id] == null) {
-        sliderValues[node.id] = Math.max(0, -(model[node.id] ?? 0));
-      }
-    }
-    for (const key of Object.keys(sliderValues)) {
-      if (!nodes.some((node) => node.id === key)) {
-        delete sliderValues[key];
-      }
-    }
-    publish();
+  [adjustableNodes, () => props.modelValue],
+  () => {
+    syncSlidersFromModel();
   },
-  { immediate: true },
+  { immediate: true, deep: true },
 );
 
+function publish(): void {
+  emit('update:modelValue', buildDemandPayload(sliderValues, props.modelValue));
+}
+
 function onSliderChange(nodeId: string, value: number) {
+  if (syncingFromModel) {
+    return;
+  }
   sliderValues[nodeId] = value;
   publishDebounced();
 }
 
 function resetAll() {
+  if (publishTimer) {
+    clearTimeout(publishTimer);
+    publishTimer = null;
+  }
   for (const key of Object.keys(sliderValues)) {
     sliderValues[key] = 0;
   }
-  publish();
-}
-
-function publish() {
-  const payload: Record<string, number> = {};
-  for (const [nodeId, withdrawal] of Object.entries(sliderValues)) {
-    if (withdrawal > 0) {
-      payload[nodeId] = -withdrawal;
-    }
-  }
-  emit('update:modelValue', payload);
+  emit('update:modelValue', {});
 }
 
 function publishDebounced() {

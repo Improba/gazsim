@@ -71,7 +71,7 @@
       <template #avatar>
         <q-icon name="info" color="blue-grey-4" />
       </template>
-      Aucun résultat de simulation
+      Aucun résultat — sélectionnez une nomination ci-dessous puis validez la tenue pression.
       <template #action>
         <q-btn
           flat
@@ -81,6 +81,40 @@
         />
       </template>
     </q-banner>
+
+    <div v-if="hasNetwork" class="workspace-page__launch q-mb-md">
+      <NominationPanel :disabled="simulateStore.loading" />
+      <div class="row q-gutter-sm q-mt-sm">
+        <q-btn
+          unelevated
+          color="primary"
+          :label="launchLabel"
+          icon="play_arrow"
+          :loading="simulateStore.loading"
+          :disable="simulateStore.loading || networkStore.switching"
+          @click="onValidate"
+        />
+        <q-btn
+          v-if="simulateStore.loading"
+          color="negative"
+          icon="stop"
+          label="Arrêter"
+          @click="simulateStore.cancelSimulation()"
+        />
+      </div>
+      <q-banner
+        v-if="simulateStore.inputDirty && hasResult"
+        dense
+        rounded
+        class="bg-amber-10 text-amber-2 q-mt-sm"
+      >
+        <template #avatar>
+          <q-icon name="info" />
+        </template>
+        <span v-if="simulateStore.scenarioDirty">Nomination modifiée — relancez pour re-valider la tenue pression.</span>
+        <span v-else>Soutirages ou réglages modifiés — relancez pour voir l'effet.</span>
+      </q-banner>
+    </div>
 
     <NovaWorkflowStepper
       v-if="hasNetwork && hasResult && novaWorkflowEnabled"
@@ -121,6 +155,7 @@ import PressureProfileView from 'src/components/workspace/PressureProfileView.vu
 import ResultsTableView from 'src/components/workspace/ResultsTableView.vue';
 import NovaWorkflowStepper from 'src/components/workspace/NovaWorkflowStepper.vue';
 import ResultsRail from 'src/components/workspace/ResultsRail.vue';
+import NominationPanel from 'src/components/NominationPanel.vue';
 import { useDemo } from 'src/composables/useDemo';
 import { useNovaWorkflow } from 'src/composables/useNovaWorkflow';
 import { useNetworkStore } from 'src/stores/network';
@@ -149,6 +184,13 @@ const selectedNode = ref<string | null>(null);
 
 const hasNetwork = computed(() => networkStore.nodes.length > 0);
 const hasResult = computed(() => simulateStore.result !== null);
+const launchLabel = computed(() =>
+  nominationStore.activeId ? 'Valider la nomination' : 'Lancer',
+);
+
+function onValidate(): void {
+  void simulateStore.startValidation();
+}
 
 function onRunStudy(): void {
   void simulateStore.runSinkCapacity(
@@ -181,39 +223,12 @@ function onFocusDeficits(): void {
   });
 }
 
-function buildWorkspaceRunOptions(scenarioId: string | null) {
-  return {
-    ...(simulateStore.lastRunOptions() ?? {}),
-    ...(scenarioId ? { scenario_id: scenarioId } : {}),
-  };
-}
-
 function onReduce(sinkId: string, maxFeasibleQ: number): void {
-  const demands = {
-    ...(simulateStore.lastInputDemands() ?? {}),
-    [sinkId]: -Math.abs(maxFeasibleQ),
-  };
-  const scenarioId = simulateStore.activeScenarioId ?? nominationStore.activeId;
-  void simulateStore.runSimulation(
-    demands,
-    buildWorkspaceRunOptions(scenarioId),
-    simulateStore.lastRunEquipmentOverrides(),
-  );
+  void simulateStore.applySinkReduction(sinkId, maxFeasibleQ);
 }
 
 function onReduceAll(): void {
-  const demands = { ...(simulateStore.lastInputDemands() ?? {}) };
-  for (const r of simulateStore.sinkCapacity) {
-    if (r.feasible_fraction < 1) {
-      demands[r.sink_id] = -Math.abs(r.max_feasible_q_m3s);
-    }
-  }
-  const scenarioId = simulateStore.activeScenarioId ?? nominationStore.activeId;
-  void simulateStore.runSimulation(
-    Object.keys(demands).length > 0 ? demands : undefined,
-    buildWorkspaceRunOptions(scenarioId),
-    simulateStore.lastRunEquipmentOverrides(),
-  );
+  void simulateStore.applyAllCapacityReductions();
 }
 
 async function onSaveReduced(demands: Record<string, number>): Promise<void> {
@@ -242,6 +257,10 @@ async function onSaveReduced(demands: Record<string, number>): Promise<void> {
 .workspace-page__switcher {
   border: 1px solid var(--scada-border);
   border-radius: 4px;
+}
+
+.workspace-page__launch {
+  max-width: 520px;
 }
 
 .workspace-page__stepper {

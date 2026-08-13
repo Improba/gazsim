@@ -65,8 +65,7 @@
       :class="{ 'nova-section--active': props.activeSection === 'export' }"
     >
       <div class="text-subtitle2 q-mb-xs">
-        Convergence en {{ iterationsLabel }} itérations
-        ({{ CONVERGENCE_GAP_LABEL.toLowerCase() }} : {{ residualLabel }})
+        {{ simulateStore.novaActive ? 'Exporter' : `Convergence en ${iterationsLabel} itérations (${CONVERGENCE_GAP_LABEL.toLowerCase()} : ${residualLabel})` }}
       </div>
 
       <div class="row q-col-gutter-sm q-mb-sm">
@@ -115,6 +114,145 @@
 
     <CertificationReportDialog v-model="showReport" />
 
+    <q-expansion-item
+      v-if="simulateStore.novaActive"
+      dense
+      dark
+      icon="science"
+      label="Détails techniques"
+      class="q-mb-sm bg-grey-10 rounded-borders"
+    >
+      <div class="q-pa-sm">
+        <div class="text-caption text-grey-5 q-mb-sm">
+          {{ iterationsLabel }} itérations · {{ CONVERGENCE_GAP_LABEL.toLowerCase() }} {{ residualLabel }}
+        </div>
+        <template v-if="props.showSolverDetails">
+          <div v-if="simulateStore.capacityViolations.length > 0" class="q-mb-sm">
+            <q-banner dense class="bg-red-10 text-white q-mb-sm" rounded>
+              <template #avatar>
+                <q-icon name="warning" />
+              </template>
+              {{ simulateStore.capacityViolations.length }} violation(s) de capacité
+            </q-banner>
+            <div
+              v-for="v in simulateStore.capacityViolations"
+              :key="v.element_id + v.bound_type"
+              class="text-caption q-mb-xs"
+            >
+              <q-icon
+                :name="v.bound_type === 'max' ? 'arrow_upward' : 'arrow_downward'"
+                color="red-4"
+                size="14px"
+              />
+              <span class="text-bold">{{ v.element_id }}</span>:
+              {{ formatFinite(v.actual) }} Nm³/s
+              ({{ v.bound_type === 'max' ? 'max' : 'min' }}: {{ formatFinite(v.limit) }})
+            </div>
+          </div>
+
+          <q-expansion-item
+            v-if="adjustedDemandEntries.length > 0"
+            dense
+            dark
+            icon="tune"
+            :label="`Soutirages ajustés (${adjustedDemandEntries.length})`"
+            class="q-mb-sm bg-grey-10 rounded-borders"
+          >
+            <div class="q-pa-sm">
+              <div
+                v-for="entry in adjustedDemandEntries"
+                :key="'adj-' + entry.nodeId"
+                class="text-caption q-mb-xs"
+              >
+                <q-icon
+                  v-if="simulateStore.activeBounds.includes(String(entry.nodeId))"
+                  name="lock"
+                  color="amber-5"
+                  size="14px"
+                />
+                {{ entry.nodeId }}: {{ formatFinite(entry.value) }} Nm³/s
+              </div>
+            </div>
+          </q-expansion-item>
+
+          <div v-if="networkWarnings.length > 0" class="q-mb-sm">
+            <q-banner dense class="bg-amber-10 text-white q-mb-sm" rounded>
+              <template #avatar>
+                <q-icon name="info" />
+              </template>
+              {{ networkWarnings.length }} avertissement(s) réseau
+            </q-banner>
+            <div
+              v-for="(w, idx) in networkWarnings"
+              :key="'warn-' + idx"
+              class="text-caption q-mb-xs text-amber-3"
+            >
+              {{ w }}
+            </div>
+          </div>
+
+          <q-expansion-item
+            v-if="simulateStore.equipmentStates.length > 0"
+            dense
+            dark
+            icon="settings_input_component"
+            :label="`${EQUIPMENT_SETTINGS_SECTION_LABEL} (${simulateStore.equipmentStates.length})`"
+            class="q-mb-sm bg-grey-10 rounded-borders"
+          >
+            <div class="q-pa-sm">
+              <div
+                v-for="eq in simulateStore.equipmentStates"
+                :key="eq.pipe_id"
+                class="text-caption q-mb-sm"
+              >
+                <span class="text-bold">{{ eq.pipe_id }}</span>
+                <span class="text-grey-5"> — {{ equipmentKindLabel(eq.kind) }}</span>
+                <q-badge
+                  :color="eq.mode === 'active' ? 'green-8' : 'orange-9'"
+                  class="q-ml-xs"
+                >
+                  {{ regulatorModeLabel(eq.mode) }}
+                </q-badge>
+              </div>
+            </div>
+          </q-expansion-item>
+        </template>
+
+        <q-expansion-item
+          dense
+          dark
+          icon="speed"
+          :label="`Pressions (${pressureCount})`"
+          class="q-mb-sm bg-grey-10 rounded-borders"
+        >
+          <div class="q-pa-sm">
+            <ResultValueList
+              :items="simulateStore.result?.pressures ?? {}"
+              :decimals="2"
+              search-placeholder="Filtrer un nœud…"
+            />
+          </div>
+        </q-expansion-item>
+
+        <q-expansion-item
+          dense
+          dark
+          icon="water_drop"
+          :label="`Débits (${flowCount})`"
+          class="bg-grey-10 rounded-borders"
+        >
+          <div class="q-pa-sm">
+            <ResultValueList
+              :items="simulateStore.result?.flows ?? {}"
+              :decimals="4"
+              search-placeholder="Filtrer une conduite…"
+            />
+          </div>
+        </q-expansion-item>
+      </div>
+    </q-expansion-item>
+
+    <template v-else>
     <template v-if="props.showSolverDetails">
       <div v-if="simulateStore.capacityViolations.length > 0" class="q-mt-md">
         <q-banner dense class="bg-red-10 text-white q-mb-sm" rounded>
@@ -144,7 +282,7 @@
         dense
         dark
         icon="tune"
-        :label="`Demandes ajustées (${adjustedDemandEntries.length})`"
+        :label="`Soutirages ajustés (${adjustedDemandEntries.length})`"
         class="q-mb-sm bg-grey-10 rounded-borders"
       >
         <div class="q-pa-sm">
@@ -208,8 +346,6 @@
       </q-expansion-item>
     </template>
 
-    <slot name="after-export" />
-
     <q-expansion-item
       dense
       dark
@@ -220,7 +356,7 @@
     >
       <div class="q-pa-sm">
         <ResultValueList
-          :items="simulateStore.result.pressures"
+          :items="simulateStore.result?.pressures ?? {}"
           :decimals="2"
           search-placeholder="Filtrer un nœud…"
         />
@@ -236,12 +372,15 @@
     >
       <div class="q-pa-sm">
         <ResultValueList
-          :items="simulateStore.result.flows"
+          :items="simulateStore.result?.flows ?? {}"
           :decimals="4"
           search-placeholder="Filtrer une conduite…"
         />
       </div>
     </q-expansion-item>
+    </template>
+
+    <slot name="after-export" />
   </div>
 </template>
 
@@ -291,13 +430,14 @@ const emit = defineEmits<{
 const simulateStore = useSimulateStore();
 const showReport = ref(false);
 const scenarioDirty = computed(() => simulateStore.scenarioDirty);
+const scenarioStale = computed(() => simulateStore.scenarioStale);
 
 const {
   novaNominationId,
   contingencyNominationLink,
   disabled: contingencyCtaDisabled,
   disabledTooltip: contingencyCtaTooltip,
-} = useContingencyNominationCta(scenarioDirty);
+} = useContingencyNominationCta(scenarioStale);
 
 const exportFormats = [
   { key: 'json' as const, label: 'JSON', icon: 'download' },
@@ -328,7 +468,7 @@ const residualLabel = computed(() => {
 const partialContinuationWarning = computed(() => {
   const scale = simulateStore.result?.demand_scale_achieved;
   if (scale !== undefined && scale < 1) {
-    return `Convergence partielle à ${Math.round(scale * 100)} % des demandes — résultat valide pour cette charge seulement.`;
+    return `Convergence partielle à ${Math.round(scale * 100)} % des soutirages — résultat valide pour cette charge seulement.`;
   }
   const continuationWarnings = simulateStore.warnings.filter((w) =>
     w.toLowerCase().includes('continuation'),

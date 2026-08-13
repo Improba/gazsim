@@ -55,11 +55,30 @@ describe('useContingencyNominationCta', () => {
 
     nominationStore.selectById('nomination_mild_618');
     networkStore.nodes = [{ id: 'N1' } as never];
+    simulateStore.lastRunScenarioId = 'nomination_mild_618';
+    simulateStore.status = 'converged';
+    nominationStore.selectById('other_scn');
+
+    const scenarioStale = computed(() => simulateStore.scenarioStale);
+    const { disabled, disabledTooltip } = useContingencyNominationCta(scenarioStale);
+
+    expect(disabled.value).toBe(true);
+    expect(disabledTooltip.value).toContain('dernière validation');
+  });
+
+  it('is disabled on Workspace before any nomination has been validated', () => {
+    const nominationStore = useNominationStore();
+    const networkStore = useNetworkStore();
+    const simulateStore = useSimulateStore();
+
+    nominationStore.selectById('nomination_mild_618');
+    networkStore.nodes = [{ id: 'N1' } as never];
     simulateStore.status = 'converged';
 
-    const scenarioDirty = computed(() => simulateStore.scenarioDirty);
-    const { disabled, disabledTooltip } = useContingencyNominationCta(scenarioDirty);
+    const scenarioStale = computed(() => simulateStore.scenarioStale);
+    const { disabled, disabledTooltip } = useContingencyNominationCta(scenarioStale);
 
+    expect(simulateStore.scenarioDirty).toBe(false);
     expect(disabled.value).toBe(true);
     expect(disabledTooltip.value).toContain('dernière validation');
   });

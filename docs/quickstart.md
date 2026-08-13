@@ -24,12 +24,12 @@ Fastest way to run a GazFlow simulation locally.
 - Frontend: `http://localhost:9000`
 - Backend API: `http://localhost:3001`
 
-## 4) Run a simulation
+## 4) Validate a nomination (NoVa)
 
-1. Open the map page.
-2. In the **Simulation** panel, click **Start**.
-3. Follow progress (iterations, residual, logs) in real time.
-4. Export to JSON/CSV/ZIP once converged.
+1. Open **Valider une nomination** (map) or the analysis workspace.
+2. Select a `.scn` nomination, then click **Valider la nomination**.
+3. Read the verdict, optional capacity study, reduce and re-validate, then export the certification report.
+4. Advanced solver logs stay collapsed; JSON/CSV/ZIP export remains available after convergence.
 
 ## 5) Optional — transient simulation
 

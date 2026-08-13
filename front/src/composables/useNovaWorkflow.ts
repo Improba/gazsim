@@ -26,6 +26,25 @@ export function useNovaWorkflow() {
     () => simulateStore.activeScenarioId !== null && simulateStore.novaActive,
   );
 
+  function isDone(step: NovaWorkflowStep): boolean {
+    switch (step) {
+      case 'verdict':
+        return simulateStore.result !== null && simulateStore.novaActive;
+      case 'causes':
+        return (
+          simulateStore.sinkDiagnostics.length > 0 ||
+          simulateStore.pressureMargins.length > 0 ||
+          simulateStore.boundarySupply.length > 0
+        );
+      case 'capacity':
+        return simulateStore.sinkCapacity.length > 0;
+      case 'export':
+        return simulateStore.result !== null && simulateStore.novaActive;
+      default:
+        return false;
+    }
+  }
+
   function goTo(step: NovaWorkflowStep): void {
     currentStep.value = step;
     requestAnimationFrame(() => {
@@ -39,6 +58,7 @@ export function useNovaWorkflow() {
     currentStep,
     enabled,
     goTo,
+    isDone,
     steps: NOVA_WORKFLOW_STEPS,
   };
 }

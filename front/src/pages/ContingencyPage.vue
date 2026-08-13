@@ -209,7 +209,7 @@ const launchDisabled = computed(
     || contingencyStore.loading
     || editorStore.dirty
     || editorStore.saving
-    || simulateStore.scenarioDirty,
+    || simulateStore.scenarioStale,
 );
 
 const launchDisabledTooltip = computed(() => {
@@ -225,8 +225,10 @@ const launchDisabledTooltip = computed(() => {
   if (editorStore.dirty) {
     return 'Modifications réseau non enregistrées — enregistrez ou annulez avant de lancer l\'analyse.';
   }
-  if (simulateStore.scenarioDirty) {
-    return 'Nomination modifiée depuis la dernière validation — relancez la simulation avant l\'analyse N-1.';
+  if (simulateStore.scenarioStale) {
+    return simulateStore.lastRunScenarioId
+      ? 'Nomination modifiée depuis la dernière validation — relancez la simulation avant l\'analyse N-1.'
+      : 'Validez d\'abord la nomination avant l\'analyse N-1.';
   }
   return '';
 });
@@ -342,7 +344,7 @@ function maybeAutoRunAnalysis() {
     networkStore.nodes.length === 0 ||
     editorStore.dirty ||
     editorStore.saving ||
-    simulateStore.scenarioDirty
+    simulateStore.scenarioStale
   ) {
     return;
   }

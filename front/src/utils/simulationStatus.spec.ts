@@ -11,6 +11,6 @@ describe('escapeHtml', () => {
 describe('simulationStatusLabel', () => {
   it('maps known statuses to French labels', () => {
     expect(simulationStatusLabel('running')).toBe('Calcul en cours');
-    expect(simulationStatusLabel('converged')).toBe('Convergé');
+    expect(simulationStatusLabel('converged')).toBe('Calcul terminé');
   });
 });

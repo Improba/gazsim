@@ -64,30 +64,32 @@ Camille **valide les nominations** des expéditeurs (shippers) contre la capacit
 
 ## 8. Frustrations actuelles avec GazFlow
 
-### État produit (juillet 2026)
+### État produit (août 2026)
 
 Le parcours NoVa Camille est livré sur `main` :
 
 - **Verdict** explicite (faisable / non faisable / verdict non établi) avec cause actionnable et signature moteur.
 - **Nomination** first-class : sélection `.scn`, panneau dédié, import et comparaison.
+- **Chaîne unique** carte / Espace d'analyse : `Valider la nomination`, soutirages partagés, réduction capacité, re-validation.
 - **Marges pression** contractuelles exposées avec les slips.
-- **Capacité par sink** : étude opt-in, réduction par sink ou globale, re-validation.
+- **Capacité par sink** : étude opt-in, réduction par sink ou globale, re-validation **sans perdre la table** (même nomination) ; enregistrer la version réduite ensuite.
 - **Enregistrer nomination réduite** : `POST /api/nova/nominations/reduced` (entries mass-balance à débit fixe).
-- **CTA N-1** sur la nomination active (lien vers l'analyse N-1 avec `scenario_id`).
+- **N-1** : CTA et page d'analyse exigent que la nomination active soit celle du dernier run validé.
 - **Rapport de certification** exportable (impression / PDF / JSON).
 - **Vocabulaire métier** NoVa (nomination, soutirages, réglages équipements, écart de convergence).
-- **Stepper** Verdict → Causes → Capacité → Export dans l'Espace d'analyse (`ResultsRail` / `SimulationPanel`).
+- **Stepper** Verdict → Causes → Capacité → Export (carte et Espace d'analyse).
+- **Nav** : workflows (Valider / N-1 / Calage / Transitoire) séparés des outils (Espace d'analyse, import, exports, batch).
 
 ### Limites restantes
 
-- Pas de **drawer workflows** complet : la nav « Tâches » reste plate (N-1, calage, transitoire au même niveau qu'Import / Exports).
-- **Science GasLib-582** : le solveur Newton local peut renvoyer `NotSolvedLocal` sur `mild_618` ; l'escalade IPOPT est opt-in (`GAZFLOW_NOVA_IPOPT_ESCALATION`).
+- **Science GasLib-582** : le solveur Newton local peut renvoyer `NotSolvedLocal` sur `mild_618` ; l'escalade IPOPT est opt-in (`GAZFLOW_NOVA_IPOPT_ESCALATION`). Ce n'est pas un bug d'interface.
+- **Étude capacité** : lit le `.scn` enregistré, pas les soutirages locaux non sauvegardés. Enregistrer la nomination réduite avant de re-étudier ce cas.
 - **Pas certifié SIMONE** : outil de simulation comparative, pas un simulateur d'exploitation certifié.
 - **Jargon solveur** encore possible sur les écrans périphériques (calage SCADA, transitoire).
 
 ## 9. Critère de succès (le test Camille)
 
-> « Je charge mild_618 → je vois ⛔ Non faisable avec 4 sinks en déficit → je clique sink_88 → je vois max_up 2,64 bar vs besoin 26,0 → je lance l'étude capacité → je clique "Appliquer la capacité max partout" → je re-valide → ✅ Faisable → j'enregistre la nomination réduite → je lance l'analyse N-1 sur cette nomination → j'exporte le rapport de certification. »
+> « Je charge mild_618 → je vois ⛔ Non faisable avec 4 sinks en déficit → je clique sink_88 → je vois max_up 2,64 bar vs besoin 26,0 → je lance l'étude capacité → je clique "Appliquer la capacité max partout" → je re-valide (la table capacité reste) → j'enregistre la nomination réduite → je relance Valider → je lance l'analyse N-1 sur cette nomination → j'exporte le rapport de certification. »
 >
 > **Sans jamais ouvrir un JSON, ni scroller une liste de 582 pressions, ni lire le mot "résidu".**
 

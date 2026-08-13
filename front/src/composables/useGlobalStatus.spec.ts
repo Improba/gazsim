@@ -15,7 +15,7 @@ describe('useGlobalStatus', () => {
     expect(RUN_STATUS_LABEL).toEqual({
       idle: 'En attente',
       running: 'En cours',
-      converged: 'Convergé',
+      converged: 'Calcul terminé',
       cancelled: 'Annulé',
       error: 'Échec',
     });
@@ -63,7 +63,7 @@ describe('useGlobalStatus', () => {
     });
     expect(status.runStatus.value).toEqual({
       status: 'converged',
-      label: 'Convergé',
+      label: 'Calcul terminé',
       tone: 'success',
     });
     expect(status.n1Status.value).toEqual({
@@ -72,6 +72,23 @@ describe('useGlobalStatus', () => {
       tone: 'success',
       passed: 1,
       total: 1,
+    });
+  });
+
+  it('surfaces the NoVa verdict instead of Calcul terminé when a nomination is active', () => {
+    const simulateStore = useSimulateStore();
+    simulateStore.status = 'converged';
+    simulateStore.novaVerdict = {
+      feasible: false,
+      deficit_sinks: ['sink_88'],
+      cause: 'PressureDeficit',
+    };
+
+    const status = useGlobalStatus();
+    expect(status.runStatus.value).toEqual({
+      status: 'converged',
+      label: 'Tenue pression non tenue',
+      tone: 'danger',
     });
   });
 

@@ -37,7 +37,14 @@ vi.mock('quasar', () => ({
 }));
 
 const networkStoreMock = vi.hoisted(() => ({
-  nodes: [{ id: 'N1' }, { id: 'N2' }] as { id: string }[],
+  nodes: [{ id: 'N1' }, { id: 'N2' }] as {
+    id: string;
+    flow_min_m3s?: number | null;
+    flow_max_m3s?: number | null;
+  }[],
+  gas: {
+    composition: { ch4: 0.97, c2h6: 0.01, co2: 0.01, n2: 0.01, h2: 0 },
+  },
 }));
 
 vi.mock('src/services/ws', () => ({
@@ -63,6 +70,7 @@ vi.mock('src/stores/network', () => ({
 }));
 
 import { useSimulateStore } from './simulate';
+import { useNominationStore } from './nomination';
 
 describe('useSimulateStore', () => {
   beforeEach(() => {
@@ -259,13 +267,28 @@ describe('useSimulateStore', () => {
     expect(store.capacityError).not.toBeNull();
   });
 
-  it('resetSimulation clears activeScenarioId and lastRunScenarioId', () => {
+  it('resetSimulation clears activeScenarioId, lastRunScenarioId and sinkCapacity', () => {
     const store = useSimulateStore();
     store.activeScenarioId = 'nomination_mild_618';
     store.lastRunScenarioId = 'nomination_mild_618';
+    store.sinkCapacity = [
+      {
+        sink_id: 'sink_88',
+        nominal_q_m3s: 12.5,
+        max_feasible_q_m3s: 0,
+        feasible_fraction: 0,
+        pressure_lower_bar: 26,
+        pressure_at_max_bar: 2.6,
+        pressure_shortfall_bar: 23.4,
+        residual_at_max_m3s: 1,
+        bisection_steps: 6,
+        feasible_at_nominal: false,
+      },
+    ];
     store.resetSimulation();
     expect(store.activeScenarioId).toBeNull();
     expect(store.lastRunScenarioId).toBeNull();
+    expect(store.sinkCapacity).toEqual([]);
   });
 
   it('resetSimulation clears lastRunParams so rerun is unavailable', async () => {
@@ -276,5 +299,193 @@ describe('useSimulateStore', () => {
     expect(store.hasLastRun).toBe(false);
     expect(store.lastInputDemands()).toBeUndefined();
     expect(store.lastRunOptions()).toBeUndefined();
+  });
+
+  it('startValidation sends the active nomination and shared demand overrides', async () => {
+    const store = useSimulateStore();
+    const nominationStore = useNominationStore();
+    nominationStore.selectById('nomination_mild_618');
+    store.demandOverrides = { sink_88: -2.5 };
+
+    await store.startValidation();
+
+    const payload = wsSpies.startSimulation.mock.calls[0]?.[0];
+    expect(payload.demands).toEqual({ sink_88: -2.5 });
+    expect(payload.options.scenario_id).toBe('nomination_mild_618');
+    expect(payload.options.gas_composition.ch4).toBe(0.97);
+  });
+
+  it('applySinkReduction writes the shared override then re-validates', async () => {
+    const store = useSimulateStore();
+    const nominationStore = useNominationStore();
+    nominationStore.selectById('nomination_mild_618');
+    store.demandOverrides = { sink_125: -1 };
+    await store.runSimulation({ sink_125: -1 }, { scenario_id: 'nomination_mild_618' });
+    store.loading = false;
+    wsSpies.startSimulation.mockClear();
+
+    await store.applySinkReduction('sink_88', 3.2);
+
+    expect(store.demandOverrides.sink_88).toBe(-3.2);
+    expect(store.demandOverrides.sink_125).toBe(-1);
+    const payload = wsSpies.startSimulation.mock.calls[0]?.[0];
+    expect(payload.demands).toEqual({ sink_125: -1, sink_88: -3.2 });
+    expect(payload.options.scenario_id).toBe('nomination_mild_618');
+  });
+
+  it('applyAllCapacityReductions reduces every infeasible sink then re-validates', async () => {
+    const store = useSimulateStore();
+    const nominationStore = useNominationStore();
+    nominationStore.selectById('nomination_mild_618');
+    store.sinkCapacity = [
+      {
+        sink_id: 'sink_88',
+        nominal_q_m3s: 12.5,
+        max_feasible_q_m3s: 0,
+        feasible_fraction: 0,
+        pressure_lower_bar: 26,
+        pressure_at_max_bar: 2.6,
+        pressure_shortfall_bar: 23.4,
+        residual_at_max_m3s: 1,
+        bisection_steps: 6,
+        feasible_at_nominal: false,
+      },
+      {
+        sink_id: 'sink_125',
+        nominal_q_m3s: 4,
+        max_feasible_q_m3s: 4,
+        feasible_fraction: 1,
+        pressure_lower_bar: 41,
+        pressure_at_max_bar: 63,
+        pressure_shortfall_bar: 0,
+        residual_at_max_m3s: 0,
+        bisection_steps: 6,
+        feasible_at_nominal: true,
+      },
+      {
+        sink_id: 'sink_shut',
+        nominal_q_m3s: 0,
+        max_feasible_q_m3s: 0,
+        feasible_fraction: 0,
+        pressure_lower_bar: 26,
+        pressure_at_max_bar: 26,
+        pressure_shortfall_bar: 0,
+        residual_at_max_m3s: 0,
+        bisection_steps: 0,
+        feasible_at_nominal: true,
+      },
+    ];
+
+    await store.applyAllCapacityReductions();
+
+    expect(store.demandOverrides.sink_88).toBe(0);
+    expect(store.demandOverrides.sink_125).toBeUndefined();
+    expect(store.demandOverrides.sink_shut).toBeUndefined();
+    const payload = wsSpies.startSimulation.mock.calls[0]?.[0];
+    expect(payload.demands).toEqual({ sink_88: 0 });
+  });
+
+  it('applySinkReduction keeps an explicit zero shutoff', async () => {
+    const store = useSimulateStore();
+    const nominationStore = useNominationStore();
+    nominationStore.selectById('nomination_mild_618');
+    await store.applySinkReduction('sink_88', 0);
+    expect(store.demandOverrides.sink_88).toBe(0);
+    expect(Object.prototype.hasOwnProperty.call(store.demandOverrides, 'sink_88')).toBe(true);
+    const payload = wsSpies.startSimulation.mock.calls[0]?.[0];
+    expect(payload.demands).toEqual({ sink_88: 0 });
+  });
+
+  it('startValidation is a no-op while a run is already loading', async () => {
+    const store = useSimulateStore();
+    store.loading = true;
+    store.demandOverrides = { sink_88: -1 };
+    await store.startValidation();
+    expect(wsSpies.startSimulation).not.toHaveBeenCalled();
+  });
+
+  it('scenarioDirty is false before the first run even with a nomination selected', () => {
+    const store = useSimulateStore();
+    const nominationStore = useNominationStore();
+    nominationStore.selectById('nomination_mild_618');
+    expect(store.scenarioDirty).toBe(false);
+  });
+
+  it('scenarioDirty becomes true when the nomination changes after a run', async () => {
+    const store = useSimulateStore();
+    const nominationStore = useNominationStore();
+    nominationStore.selectById('nomination_mild_618');
+    await store.runSimulation(undefined, { scenario_id: 'nomination_mild_618' });
+    store.loading = false;
+    store.status = 'converged';
+    expect(store.scenarioDirty).toBe(false);
+    nominationStore.selectById('other_scn');
+    expect(store.scenarioDirty).toBe(true);
+    expect(store.scenarioStale).toBe(true);
+  });
+
+  it('scenarioStale is true before the first run when a nomination is selected', () => {
+    const store = useSimulateStore();
+    const nominationStore = useNominationStore();
+    nominationStore.selectById('nomination_mild_618');
+    expect(store.scenarioDirty).toBe(false);
+    expect(store.scenarioStale).toBe(true);
+  });
+
+  it('lastInputDemands preserves an explicit zero shutoff', async () => {
+    const store = useSimulateStore();
+    await store.runSimulation({ sink_88: 0 }, { scenario_id: 'nomination_mild_618' });
+    expect(store.lastInputDemands()).toEqual({ sink_88: 0 });
+  });
+
+  it('applySinkReduction keeps the capacity table for the same nomination', async () => {
+    const store = useSimulateStore();
+    const nominationStore = useNominationStore();
+    nominationStore.selectById('nomination_mild_618');
+    await store.runSimulation(undefined, { scenario_id: 'nomination_mild_618' });
+    store.loading = false;
+    store.sinkCapacity = [
+      {
+        sink_id: 'sink_88',
+        nominal_q_m3s: 12.5,
+        max_feasible_q_m3s: 0,
+        feasible_fraction: 0,
+        pressure_lower_bar: 26,
+        pressure_at_max_bar: 2.6,
+        pressure_shortfall_bar: 23.4,
+        residual_at_max_m3s: 1,
+        bisection_steps: 6,
+        feasible_at_nominal: false,
+      },
+    ];
+
+    await store.applySinkReduction('sink_88', 0);
+
+    expect(store.sinkCapacity).toHaveLength(1);
+    expect(store.sinkCapacity[0]?.sink_id).toBe('sink_88');
+  });
+
+  it('runSimulation clears the capacity table when the nomination changes', async () => {
+    const store = useSimulateStore();
+    await store.runSimulation(undefined, { scenario_id: 'nomination_mild_618' });
+    store.loading = false;
+    store.sinkCapacity = [
+      {
+        sink_id: 'sink_88',
+        nominal_q_m3s: 12.5,
+        max_feasible_q_m3s: 0,
+        feasible_fraction: 0,
+        pressure_lower_bar: 26,
+        pressure_at_max_bar: 2.6,
+        pressure_shortfall_bar: 23.4,
+        residual_at_max_m3s: 1,
+        bisection_steps: 6,
+        feasible_at_nominal: false,
+      },
+    ];
+
+    await store.runSimulation(undefined, { scenario_id: 'other_scn' });
+
+    expect(store.sinkCapacity).toEqual([]);
   });
 });

@@ -19,15 +19,23 @@
 
         <nav class="gt-md row items-center no-wrap nav-desktop" aria-label="Navigation principale">
           <q-btn flat label="Tableau de bord" :to="{ name: 'dashboard' }" exact active-class="nav-active" />
-          <q-btn flat label="Espace d'analyse" :to="{ name: 'workspace' }" active-class="nav-active" />
-          <q-btn flat label="Carte" :to="{ name: 'map' }" active-class="nav-active" />
+          <q-btn flat label="Valider" :to="{ name: 'map' }" active-class="nav-active">
+            <q-tooltip>Valider une nomination</q-tooltip>
+          </q-btn>
+          <q-btn flat label="N-1" :to="{ name: 'contingency' }" active-class="nav-active">
+            <q-tooltip>Analyser N-1</q-tooltip>
+          </q-btn>
+          <q-btn flat label="Calage" :to="{ name: 'calibration' }" active-class="nav-active">
+            <q-tooltip>Caler sur SCADA</q-tooltip>
+          </q-btn>
+          <q-btn flat label="Transitoire" :to="{ name: 'transient' }" active-class="nav-active" />
 
           <q-separator vertical dark class="nav-sep" />
 
-          <q-btn-dropdown flat label="Tâches" icon="task_alt" auto-close>
+          <q-btn-dropdown flat label="Outils" icon="handyman" auto-close>
             <q-list dense>
               <q-item
-                v-for="item in taskLinks"
+                v-for="item in toolLinks"
                 :key="item.name"
                 :to="{ name: item.name }"
                 clickable
@@ -69,9 +77,9 @@
       :width="280"
     >
       <q-list padding>
-        <q-item-label header class="text-grey-5">Navigation</q-item-label>
+        <q-item-label header class="text-grey-5">Workflows</q-item-label>
         <q-item
-          v-for="item in primaryLinks"
+          v-for="item in workflowLinks"
           :key="item.name"
           :to="{ name: item.name }"
           clickable
@@ -87,9 +95,9 @@
         </q-item>
 
         <q-separator dark class="q-my-sm" />
-        <q-item-label header class="text-grey-5">Tâches</q-item-label>
+        <q-item-label header class="text-grey-5">Outils</q-item-label>
         <q-item
-          v-for="item in taskLinks"
+          v-for="item in toolLinks"
           :key="item.name"
           :to="{ name: item.name }"
           clickable
@@ -145,8 +153,10 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useNetworkStore } from 'src/stores/network';
+import { useNominationStore } from 'src/stores/nomination';
+import { useContingencyStore } from 'src/stores/contingency';
 import { useSimulateStore } from 'src/stores/simulate';
 import GlobalStatusBar from 'src/components/GlobalStatusBar.vue';
 
@@ -155,23 +165,36 @@ const leftDrawer = ref(false);
 const appHeader = ref<{ $el?: HTMLElement } | HTMLElement | null>(null);
 const simulateStore = useSimulateStore();
 const networkStore = useNetworkStore();
+const nominationStore = useNominationStore();
+const contingencyStore = useContingencyStore();
 
-const primaryLinks = [
+const workflowLinks = [
   { name: 'dashboard', label: 'Tableau de bord', icon: 'dashboard' },
-  { name: 'workspace', label: "Espace d'analyse", icon: 'analytics' },
-  { name: 'map', label: 'Carte', icon: 'map' },
+  { name: 'map', label: 'Valider une nomination', icon: 'verified' },
+  { name: 'contingency', label: 'Analyser N-1', icon: 'shield' },
+  { name: 'calibration', label: 'Caler sur SCADA', icon: 'tune' },
+  { name: 'transient', label: 'Transitoire', icon: 'timeline' },
 ] as const;
 
-const taskLinks = [
+const toolLinks = [
+  { name: 'workspace', label: "Espace d'analyse", icon: 'analytics' },
   { name: 'import', label: 'Importer un réseau', icon: 'upload' },
-  { name: 'contingency', label: 'Analyse N-1', icon: 'shield' },
-  { name: 'calibration', label: 'Calage SCADA', icon: 'tune' },
-  { name: 'transient', label: 'Transitoire', icon: 'timeline' },
   { name: 'exports', label: 'Exports', icon: 'download' },
   { name: 'batch', label: 'Lot (batch)', icon: 'dynamic_feed' },
 ] as const;
 
 let headerObserver: ResizeObserver | null = null;
+
+watch(
+  () => nominationStore.activeId,
+  (id, previous) => {
+    if (id === previous) {
+      return;
+    }
+    simulateStore.clearDemandOverrides();
+    contingencyStore.reset();
+  },
+);
 
 function resolveHeaderEl(): HTMLElement | null {
   const value = appHeader.value;

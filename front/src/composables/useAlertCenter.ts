@@ -118,7 +118,7 @@ export function useAlertCenter(): { alerts: ComputedRef<Alert[]> } {
         id: 'demand-scale-partial',
         tone: 'warning',
         title: 'Convergence partielle',
-        body: `${Math.round(Math.max(0, scaleAchieved) * 100)} % des demandes servies.`,
+        body: `${Math.round(Math.max(0, scaleAchieved) * 100)} % des soutirages honorés.`,
       });
     }
 

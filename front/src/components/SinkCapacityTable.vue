@@ -119,7 +119,7 @@
             <td class="text-right">{{ formatBar(r.pressure_lower_bar) }}</td>
             <td class="text-center">
               <q-btn
-                v-if="r.feasible_fraction < 1"
+                v-if="needsCapacityReduction(r)"
                 dense
                 flat
                 color="secondary"
@@ -143,6 +143,8 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { useSimulateStore } from 'src/stores/simulate';
+import { toSinkOverrideFlow } from 'src/utils/demandOverrides';
+import { needsCapacityReduction } from 'src/utils/sinkCapacity';
 
 const simulateStore = useSimulateStore();
 
@@ -158,7 +160,7 @@ const visible = computed(() => simulateStore.activeScenarioId !== null);
 const scenarioDirty = computed(() => simulateStore.scenarioDirty);
 
 const hasReductions = computed(() =>
-  simulateStore.sinkCapacity.some((r) => r.feasible_fraction < 1),
+  simulateStore.sinkCapacity.some((r) => needsCapacityReduction(r)),
 );
 
 const hasActiveScenario = computed(() => simulateStore.activeScenarioId !== null);
@@ -173,8 +175,8 @@ function saveReduced() {
   }
   const demands: Record<string, number> = {};
   for (const r of simulateStore.sinkCapacity) {
-    if (r.feasible_fraction < 1) {
-      demands[r.sink_id] = -Math.abs(r.max_feasible_q_m3s);
+    if (needsCapacityReduction(r)) {
+      demands[r.sink_id] = toSinkOverrideFlow(r.max_feasible_q_m3s);
     }
   }
   emit('save-reduced', demands);

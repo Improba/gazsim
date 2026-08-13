@@ -3,6 +3,7 @@ import { useContingencyStore } from 'src/stores/contingency';
 import { useNetworkStore } from 'src/stores/network';
 import { useNominationStore } from 'src/stores/nomination';
 import { useSimulateStore } from 'src/stores/simulate';
+import { novaOutcomeBadgeLabel } from 'src/utils/novaLabels';
 
 export type RunStatusKey = 'idle' | 'running' | 'converged' | 'cancelled' | 'error';
 export type StatusTone = 'success' | 'warning' | 'danger' | 'neutral';
@@ -10,7 +11,7 @@ export type StatusTone = 'success' | 'warning' | 'danger' | 'neutral';
 export const RUN_STATUS_LABEL: Record<RunStatusKey, string> = {
   idle: 'En attente',
   running: 'En cours',
-  converged: 'Convergé',
+  converged: 'Calcul terminé',
   cancelled: 'Annulé',
   error: 'Échec',
 };
@@ -81,6 +82,19 @@ export function useGlobalStatus(): GlobalStatus {
 
   const runStatus = computed<RunStatus>(() => {
     const status = simulateStore.status;
+    if (status === 'converged' && simulateStore.novaActive && simulateStore.novaVerdict) {
+      const verdict = simulateStore.novaVerdict;
+      const tone: StatusTone = verdict.feasible
+        ? 'success'
+        : verdict.cause === 'NotSolvedLocal'
+          ? 'warning'
+          : 'danger';
+      return {
+        status,
+        label: novaOutcomeBadgeLabel(verdict.feasible, verdict.cause),
+        tone,
+      };
+    }
     return {
       status,
       label: RUN_STATUS_LABEL[status],

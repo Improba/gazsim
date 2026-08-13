@@ -113,7 +113,7 @@ describe('useAlertCenter', () => {
       id: 'demand-scale-partial',
       tone: 'warning',
       title: 'Convergence partielle',
-      body: '72 % des demandes servies.',
+      body: '72 % des soutirages honorés.',
     });
   });
 

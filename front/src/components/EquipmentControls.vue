@@ -145,10 +145,18 @@ function baseEquipment(pipe: PipeDto): PipeEquipmentDto {
   };
 }
 
+function cancelPublishTimer() {
+  if (publishTimer) {
+    clearTimeout(publishTimer);
+    publishTimer = null;
+  }
+}
+
 function syncDraftFromNetwork() {
+  cancelPublishTimer();
   for (const pipe of equipmentPipes.value) {
     const model = props.modelValue?.[pipe.id];
-    draft[pipe.id] = model ? { ...model } : baseEquipment(pipe);
+    draft[pipe.id] = { ...baseEquipment(pipe), ...(model ?? {}) };
   }
   for (const key of Object.keys(draft)) {
     if (!equipmentPipes.value.some((p) => p.id === key)) {
@@ -157,7 +165,11 @@ function syncDraftFromNetwork() {
   }
 }
 
-watch(equipmentPipes, syncDraftFromNetwork, { immediate: true, deep: true });
+watch(
+  [equipmentPipes, () => props.modelValue],
+  syncDraftFromNetwork,
+  { immediate: true, deep: true },
+);
 
 function publish() {
   const payload: Record<string, PipeEquipmentDto> = {};
@@ -196,6 +208,7 @@ function publishDebounced() {
 }
 
 function resetAll() {
+  cancelPublishTimer();
   for (const pipe of equipmentPipes.value) {
     draft[pipe.id] = baseEquipment(pipe);
   }

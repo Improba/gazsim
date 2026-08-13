@@ -39,8 +39,8 @@
               <div class="kpi-card__value" :class="`text-${demandServedTone}`">
                 {{ demandServedDisplay }}
               </div>
-              <div class="kpi-card__label">Demandes servies</div>
-              <div class="kpi-card__sublabel">Part des demandes honorées</div>
+              <div class="kpi-card__label">Soutirages honorés</div>
+              <div class="kpi-card__sublabel">Part des soutirages servis</div>
             </q-card-section>
           </q-card>
         </div>
@@ -196,6 +196,17 @@
       </q-banner>
     </section>
 
+    <section v-if="showValidateCta" class="q-mb-md">
+      <q-btn
+        color="primary"
+        unelevated
+        size="lg"
+        icon="verified"
+        label="Valider une nomination"
+        @click="router.push({ name: 'map' })"
+      />
+    </section>
+
     <section v-if="showWorkspaceCta" class="q-mb-md">
       <q-btn
         color="primary"
@@ -220,7 +231,6 @@ import {
 } from 'src/composables/useOperationalKpis';
 import { useAlertCenter, type AlertTone } from 'src/composables/useAlertCenter';
 import { useRecentNetworks } from 'src/composables/useRecentNetworks';
-import { useContingencyStore } from 'src/stores/contingency';
 import { useDemo } from 'src/composables/useDemo';
 import { useNetworkStore } from 'src/stores/network';
 import { useSimulateStore } from 'src/stores/simulate';
@@ -327,6 +337,9 @@ function alertIcon(tone: AlertTone): string {
 }
 
 const showStartCta = computed(() => networkStore.nodes.length === 0);
+const showValidateCta = computed(
+  () => networkStore.nodes.length > 0 && simulateStore.result === null,
+);
 const showWorkspaceCta = computed(
   () => networkStore.nodes.length > 0 && simulateStore.result !== null,
 );

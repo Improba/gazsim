@@ -153,7 +153,7 @@ pub fn study_sink_max_feasible_delivery(
             sink_id: sink_id.to_string(),
             nominal_q_m3s: nominal_q,
             max_feasible_q_m3s: 0.0,
-            feasible_fraction: 0.0,
+            feasible_fraction: 1.0,
             pressure_lower_bar: pressure_lower,
             pressure_at_max_bar: None,
             pressure_shortfall_bar: 0.0,
@@ -382,6 +382,39 @@ mod tests {
             r.feasible_fraction <= 1e-6,
             "fraction should be ~0 (unreachable bound), got {}",
             r.feasible_fraction
+        );
+    }
+
+    #[test]
+    fn study_sink_zero_nomination_is_vacuously_at_full_fraction() {
+        let net = tiny_network();
+        let mut scenario = scenario_with_high_bound();
+        scenario.demands.insert("sink".to_string(), 0.0);
+        let preset = preset_for_node_count(net.node_count());
+        let sink_ids = vec!["sink".to_string()];
+
+        let reports = study_sinks_capacity(
+            &net,
+            &scenario,
+            &sink_ids,
+            &preset,
+            GasComposition::pure_ch4(),
+            6,
+        )
+        .expect("zero-Q capacity study should succeed");
+
+        assert_eq!(reports.len(), 1);
+        let r = &reports[0];
+        assert_eq!(r.sink_id, "sink");
+        assert_eq!(r.nominal_q_m3s, 0.0);
+        assert_eq!(r.max_feasible_q_m3s, 0.0);
+        assert!(
+            r.feasible_at_nominal,
+            "no delivery requested: vacuously feasible at nominal"
+        );
+        assert_eq!(
+            r.feasible_fraction, 1.0,
+            "a shut-off sink must not look like a reduction target"
         );
     }
 }

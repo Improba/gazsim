@@ -10,11 +10,15 @@ import {
   type WsCapacityOptions,
 } from 'src/services/ws';
 import { deficitSinkIds } from 'src/utils/novaDeficitSinks';
+import { toSinkOverrideFlow } from 'src/utils/demandOverrides';
+import { needsCapacityReduction } from 'src/utils/sinkCapacity';
 import { presetForNodeCount, presetRobust } from 'src/utils/solverPresets';
 import { useNetworkStore } from 'src/stores/network';
 import { useNominationStore } from 'src/stores/nomination';
 
 type SimulationStatus = 'idle' | 'running' | 'converged' | 'cancelled' | 'error';
+
+export type SimulationMode = 'free' | 'check' | 'optimize';
 
 export type RunScenarioSummary = {
   description?: string;
@@ -28,6 +32,12 @@ type LastRunParams = {
   equipmentOverrides?: Record<string, PipeEquipmentDto>;
   options?: WsStartOptions & WsCapacityOptions;
 };
+
+function sortedRecordKey(record: Record<string, unknown> | undefined): string {
+  return JSON.stringify(
+    Object.entries(record ?? {}).sort(([a], [b]) => a.localeCompare(b)),
+  );
+}
 
 export const useSimulateStore = defineStore('simulate', () => {
   const result = ref<SimulationResult | null>(null);
@@ -86,15 +96,47 @@ export const useSimulateStore = defineStore('simulate', () => {
   const lastRunParams = ref<LastRunParams | null>(null);
   const lastRunScenarioId = ref<string | null>(null);
 
-  const scenarioDirty = computed(() => {
-    // Pendant un run : pas de bannière dirty (évite le bruit).
-    // Après erreur / annulation : dirty doit rester visible pour bloquer N-1 / capacité.
+  /** Surcharges de soutirage partagées carte / espace d'analyse (source unique). */
+  const demandOverrides = ref<Record<string, number>>({});
+  const equipmentOverrides = ref<Record<string, PipeEquipmentDto>>({});
+  const simulationMode = ref<SimulationMode>('free');
+
+  const scenarioStale = computed(() => {
     if (status.value === 'running') {
       return false;
     }
     const nominationStore = useNominationStore();
     return nominationStore.activeId !== lastRunScenarioId.value;
   });
+
+  const scenarioDirty = computed(() => {
+    // Pas de bannière avant le premier run : sélectionner une nomination n'est pas une modification.
+    if (lastRunParams.value === null) {
+      return false;
+    }
+    return scenarioStale.value;
+  });
+
+  const demandsDirty = computed(() => {
+    if (status.value === 'running') {
+      return false;
+    }
+    return sortedRecordKey(demandOverrides.value) !== sortedRecordKey(lastRunParams.value?.demands);
+  });
+
+  const equipmentDirty = computed(() => {
+    if (status.value === 'running') {
+      return false;
+    }
+    return (
+      sortedRecordKey(equipmentOverrides.value) !==
+      sortedRecordKey(lastRunParams.value?.equipmentOverrides)
+    );
+  });
+
+  const inputDirty = computed(
+    () => demandsDirty.value || equipmentDirty.value || scenarioDirty.value,
+  );
 
   async function ensureConnectedWs() {
     if (!wsClient) {
@@ -156,12 +198,17 @@ export const useSimulateStore = defineStore('simulate', () => {
       const warmStartPressures =
         result.value?.pressures ??
         (Object.keys(livePressures.value).length > 0 ? { ...livePressures.value } : undefined);
+      const previousScenarioId = lastRunScenarioId.value;
       clearSnapshotQueue();
       resetRuntimeState();
       currentRunId.value = `run-${Date.now()}`;
       status.value = 'running';
       activeScenarioId.value = options?.scenario_id ?? null;
       lastRunScenarioId.value = options?.scenario_id ?? null;
+      if (lastRunScenarioId.value !== previousScenarioId) {
+        sinkCapacity.value = [];
+        capacityError.value = null;
+      }
 
       const { capacity_bounds, mode, ...solverOpts } = options ?? {};
       const mergedEquipment = equipmentOverrides;
@@ -172,7 +219,7 @@ export const useSimulateStore = defineStore('simulate', () => {
       });
 
       lastRunParams.value = {
-        demands: demands ? { ...demands } : undefined,
+        demands: demands !== undefined ? { ...demands } : undefined,
         equipmentOverrides: mergedEquipment ? { ...mergedEquipment } : undefined,
         options: { ...runOptions },
       };
@@ -213,7 +260,11 @@ export const useSimulateStore = defineStore('simulate', () => {
   }
 
   function lastInputDemands(): Record<string, number> | undefined {
-    return lastRunParams.value?.demands ? { ...lastRunParams.value.demands } : undefined;
+    const demands = lastRunParams.value?.demands;
+    if (demands === undefined) {
+      return undefined;
+    }
+    return { ...demands };
   }
 
   function lastRunEquipmentOverrides(): Record<string, PipeEquipmentDto> | undefined {
@@ -224,6 +275,98 @@ export const useSimulateStore = defineStore('simulate', () => {
 
   function lastRunOptions(): (WsStartOptions & WsCapacityOptions) | undefined {
     return lastRunParams.value?.options ? { ...lastRunParams.value.options } : undefined;
+  }
+
+  function clearDemandOverrides() {
+    demandOverrides.value = {};
+  }
+
+  function clearInputOverrides() {
+    clearDemandOverrides();
+    equipmentOverrides.value = {};
+  }
+
+  function buildCapacityBounds(): Record<string, { min: number; max: number }> {
+    const networkStore = useNetworkStore();
+    const bounds: Record<string, { min: number; max: number }> = {};
+    for (const node of networkStore.nodes) {
+      if (node.flow_min_m3s != null && node.flow_max_m3s != null) {
+        bounds[node.id] = { min: node.flow_min_m3s, max: node.flow_max_m3s };
+      }
+    }
+    return bounds;
+  }
+
+  /** Lance une validation avec la nomination active et les overrides partagés. */
+  async function startValidation() {
+    if (loading.value) {
+      return;
+    }
+    const nominationStore = useNominationStore();
+    const networkStore = useNetworkStore();
+    const demands =
+      Object.keys(demandOverrides.value).length > 0 ? { ...demandOverrides.value } : undefined;
+    const opts: WsStartOptions = {};
+    const composition = networkStore.gas?.composition;
+    if (composition) {
+      opts.gas_composition = { ...composition };
+    }
+    if (nominationStore.activeId) {
+      opts.scenario_id = nominationStore.activeId;
+    }
+    if (simulationMode.value !== 'free') {
+      opts.mode = simulationMode.value;
+      opts.capacity_bounds = buildCapacityBounds();
+    }
+    const filename = nominationStore.activeFilename;
+    setRunScenarioSummary(
+      filename
+        ? { description: `Nomination ${filename}` }
+        : demands
+          ? { description: 'Soutirages manuels' }
+          : { description: 'Régime nominal du réseau' },
+    );
+    const equipment =
+      Object.keys(equipmentOverrides.value).length > 0
+        ? { ...equipmentOverrides.value }
+        : undefined;
+    await runSimulation(demands, opts, equipment);
+  }
+
+  /** Réduit un sink au Q max faisable puis re-valide (carte et espace d'analyse). */
+  async function applySinkReduction(sinkId: string, maxFeasibleQ: number) {
+    if (loading.value) {
+      return;
+    }
+    demandOverrides.value = {
+      ...(lastInputDemands() ?? {}),
+      ...demandOverrides.value,
+      [sinkId]: toSinkOverrideFlow(maxFeasibleQ),
+    };
+    await startValidation();
+  }
+
+  /** Applique le Q max faisable sur tous les sinks déficitaires puis re-valide. */
+  async function applyAllCapacityReductions() {
+    if (loading.value) {
+      return;
+    }
+    const next: Record<string, number> = {
+      ...(lastInputDemands() ?? {}),
+      ...demandOverrides.value,
+    };
+    let reduced = 0;
+    for (const report of sinkCapacity.value) {
+      if (needsCapacityReduction(report)) {
+        next[report.sink_id] = toSinkOverrideFlow(report.max_feasible_q_m3s);
+        reduced += 1;
+      }
+    }
+    if (reduced === 0) {
+      return;
+    }
+    demandOverrides.value = next;
+    await startValidation();
   }
 
   function setRunScenarioSummary(summary: RunScenarioSummary | null) {
@@ -313,7 +456,7 @@ export const useSimulateStore = defineStore('simulate', () => {
         break;
       case 'continuation_step':
         if (!isCurrentRun(msg.run_id)) return;
-        continuationLabel.value = `Palier ${msg.step}/${msg.total_steps} — ${Math.round(msg.scale * 100)} % des demandes`;
+        continuationLabel.value = `Palier ${msg.step}/${msg.total_steps} — ${Math.round(msg.scale * 100)} % des soutirages`;
         addLog(
           `continuation ${msg.step}/${msg.total_steps} scale=${(msg.scale * 100).toFixed(0)}%`,
         );
@@ -352,7 +495,7 @@ export const useSimulateStore = defineStore('simulate', () => {
           const scaleAchieved = merged.demand_scale_achieved;
           if (scaleAchieved !== undefined && scaleAchieved < 1) {
             addLog(
-              `attention: convergence partielle à ${Math.round(scaleAchieved * 100)} % des demandes`,
+              `attention: convergence partielle à ${Math.round(scaleAchieved * 100)} % des soutirages`,
             );
           }
         }
@@ -370,10 +513,10 @@ export const useSimulateStore = defineStore('simulate', () => {
         continuationLabel.value = null;
         if (msg.reason === 'timeout') {
           errorMessage.value =
-            'Délai dépassé — activez le mode continuation ou réduisez le scénario.';
+            'Délai dépassé — activez la convergence renforcée ou réduisez le scénario.';
         } else if (msg.reason === 'diverged') {
           errorMessage.value =
-            'Non-convergence — essayez le mode continuation.';
+            'Non-convergence — essayez la convergence renforcée.';
         } else {
           errorMessage.value = null;
         }
@@ -425,8 +568,6 @@ export const useSimulateStore = defineStore('simulate', () => {
     novaVerdict.value = null;
     activeScenarioId.value = null;
     lastRunScenarioId.value = null;
-    sinkCapacity.value = [];
-    capacityError.value = null;
     compressorOperatingPoints.value = [];
     continuationLabel.value = null;
     previewStep.value = null;
@@ -472,8 +613,12 @@ export const useSimulateStore = defineStore('simulate', () => {
     }
     clearSnapshotQueue();
     resetRuntimeState();
+    sinkCapacity.value = [];
+    capacityError.value = null;
     currentRunId.value = null;
     lastRunParams.value = null;
+    clearInputOverrides();
+    simulationMode.value = 'free';
   }
 
   async function exportResult(format: 'json' | 'csv' | 'zip' | 'xlsx') {
@@ -547,7 +692,19 @@ export const useSimulateStore = defineStore('simulate', () => {
     lastRunEquipmentOverrides,
     lastRunOptions,
     lastRunScenarioId,
+    scenarioStale,
     scenarioDirty,
+    demandsDirty,
+    equipmentDirty,
+    inputDirty,
+    demandOverrides,
+    equipmentOverrides,
+    simulationMode,
+    clearInputOverrides,
+    clearDemandOverrides,
+    startValidation,
+    applySinkReduction,
+    applyAllCapacityReductions,
     setRunScenarioSummary,
     setPreviewStep,
     cancelSimulation,

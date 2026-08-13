@@ -2207,6 +2207,95 @@ mod tests {
     }
 
     #[test]
+    fn resolve_simulation_demands_merges_explicit_zero_shutoff() {
+        let tmp = contingency_scratch_dir("sim-zero");
+        let scenario_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<boundaryValue>
+  <scenario id="sim_zero">
+    <node type="sink" id="sink_a">
+      <flow value="-30.0"/>
+    </node>
+    <node type="sink" id="sink_b">
+      <flow value="-20.0"/>
+    </node>
+  </scenario>
+</boundaryValue>"#;
+        std::fs::write(tmp.join("sim_zero.scn"), scenario_xml).unwrap();
+
+        let mut net = GasNetwork::new();
+        net.add_node(Node {
+            id: "source".into(),
+            x: 0.0,
+            y: 0.0,
+            lon: Some(10.0),
+            lat: Some(50.0),
+            height_m: 0.0,
+            pressure_lower_bar: None,
+            pressure_upper_bar: None,
+            pressure_fixed_bar: Some(70.0),
+            flow_min_m3s: None,
+            flow_max_m3s: None,
+        });
+        for sink_id in ["sink_a", "sink_b"] {
+            net.add_node(Node {
+                id: sink_id.into(),
+                x: 1.0,
+                y: 0.0,
+                lon: Some(11.0),
+                lat: Some(50.0),
+                height_m: 0.0,
+                pressure_lower_bar: None,
+                pressure_upper_bar: None,
+                pressure_fixed_bar: None,
+                flow_min_m3s: None,
+                flow_max_m3s: None,
+            });
+        }
+        net.add_pipe(Pipe {
+            id: "p1".into(),
+            from: "source".into(),
+            to: "sink_a".into(),
+            kind: ConnectionKind::Pipe,
+            is_open: true,
+            length_km: 10.0,
+            diameter_mm: 500.0,
+            roughness_mm: 0.012,
+            compressor_ratio_max: None,
+            flow_min_m3s: None,
+            flow_max_m3s: None,
+            equipment: EquipmentSpec::default(),
+        });
+        net.add_pipe(Pipe {
+            id: "p2".into(),
+            from: "source".into(),
+            to: "sink_b".into(),
+            kind: ConnectionKind::Pipe,
+            is_open: true,
+            length_km: 10.0,
+            diameter_mm: 500.0,
+            roughness_mm: 0.012,
+            compressor_ratio_max: None,
+            flow_min_m3s: None,
+            flow_max_m3s: None,
+            equipment: EquipmentSpec::default(),
+        });
+
+        let defaults = HashMap::new();
+        let state = contingency_test_state(net.clone(), defaults, tmp.clone());
+
+        let mut overrides = HashMap::new();
+        overrides.insert("sink_a".to_string(), 0.0);
+        let (resolved, scenario) =
+            resolve_simulation_demands(&state, &net, Some("sim_zero"), Some(&overrides))
+                .expect("merged zero");
+        assert!(scenario.is_some());
+        assert_eq!(resolved.get("sink_a").copied(), Some(0.0));
+        assert_eq!(resolved.get("sink_b").copied(), Some(-20.0));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
     fn resolve_contingency_demands_without_scenario_id_uses_body_or_defaults() {
         let tmp = contingency_scratch_dir("defaults");
         let mut defaults = HashMap::new();

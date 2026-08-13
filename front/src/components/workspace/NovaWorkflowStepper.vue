@@ -23,15 +23,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, watch } from 'vue';
 import {
   NOVA_WORKFLOW_STEP_LABELS,
   NOVA_WORKFLOW_STEPS,
   useNovaWorkflow,
   type NovaWorkflowStep,
 } from 'src/composables/useNovaWorkflow';
+import { useSimulateStore } from 'src/stores/simulate';
 
-const { currentStep, goTo } = useNovaWorkflow();
+const { currentStep, goTo, isDone, enabled } = useNovaWorkflow();
+const simulateStore = useSimulateStore();
 
 const stepIcons: Record<NovaWorkflowStep, string> = {
   verdict: 'verified',
@@ -48,13 +50,23 @@ const stepDefs = computed(() =>
   })),
 );
 
-function stepIndex(step: NovaWorkflowStep): number {
-  return NOVA_WORKFLOW_STEPS.indexOf(step);
-}
+watch(
+  () => simulateStore.result,
+  (result) => {
+    if (result && enabled.value) {
+      goTo('verdict');
+    }
+  },
+);
 
-function isDone(step: NovaWorkflowStep): boolean {
-  return stepIndex(step) < stepIndex(currentStep.value);
-}
+watch(
+  () => simulateStore.sinkCapacity.length,
+  (count, previous) => {
+    if (count > 0 && count !== previous && enabled.value) {
+      goTo('capacity');
+    }
+  },
+);
 
 function onStepChange(value: NovaWorkflowStep): void {
   goTo(value);

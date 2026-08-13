@@ -1,6 +1,6 @@
 # Plan d'implémentation — Interface NoVa pour ingénieur Natran
 
-> **Note (juillet 2026)** : l'audit §1 est **historique** (état avant implémentation). L'état réel du livré est en **§16** (Second Increment) et **§17** (post-Second Increment).
+> **Note (août 2026)** : l'audit §1 est **historique** (état avant implémentation). L'état réel du livré est en **§16** (Second Increment), **§17** (post-Second Increment) et **§18** (chaîne unifiée carte / Espace d'analyse).
 
 **Date** : juillet 2026
 **Cible** : rendre GazFlow opérationnel pour Camille, ingénieure d'études réseau (GRT gaz) dont la mission quotidienne est la **validation de nominations** (NoVa) et l'analyse N-1.
@@ -433,7 +433,7 @@ Le plan qualifiait WS0 de « pur surfacing ». **Gap de cohérence trouvé** : l
 
 ### Statut WS5 / WS6 (Second Increment — suite, juillet 2026)
 
-- **WS5 partiel** : stepper NoVa Verdict → Causes → Capacité → Export (`NovaWorkflowStepper` dans l'Espace d'analyse et la carte) ; pas de drawer workflows dédié (nav « Tâches » encore plate).
+- **WS5** : stepper NoVa Verdict → Causes → Capacité → Export (carte et Espace d'analyse) ; nav gauche **workflows** (Valider / N-1 / Calage / Transitoire) vs **outils** (Espace d'analyse, import, exports, batch).
 - **WS6 partiel** : vocabulaire métier NoVa dans l'Espace d'analyse et la carte (`novaLabels`, nomination, soutirages, réglages équipements) ; jargon solveur possible sur calage / transitoire.
 
 **WS7 — Rapport de certification** ✅
@@ -465,8 +465,24 @@ Livrables additionnels sur `main` après le Second Increment NoVa :
 - **Contrat certification** : `pressure_margins`, `solver_signature` (NewtonPosthoc / IpoptEscalation / Unresolved), cause `PressureExcess`, libellé utilisateur `NotSolvedLocal` → « Verdict non établi ».
 - **`resolve_simulation_demands`** : avec `scenario_id`, charge les Q du `.scn` et fusionne les overrides client partiels avant le solve WS.
 - **Nomination réduite** : `POST /api/nova/nominations/reduced` (unités natives m³/s, entries mass-balance à débit fixe).
-- **N-1 branché** : `scenario_id` sur l'analyse de contingence, bornes scénario via `network_with_scenario_boundaries_for_nova`, CTA unique depuis ResultsRail / SimulationPanel, gates `scenarioDirty`.
+- **N-1 branché** : `scenario_id` sur l'analyse de contingence, bornes scénario via `network_with_scenario_boundaries_for_nova`, CTA unique depuis ResultsRail / SimulationPanel, gate `scenarioStale` (nomination du dernier run).
 - **IPOPT escalade opt-in** : `GAZFLOW_NOVA_IPOPT_ESCALATION` (`on` / `on-notsolved` / `maybe`) ; `BoundViolation` depuis pressions IPOPT.
 - **Compresseur first-class** : API `/api/compressor/map-mode` et `/api/compressor/operating-points` ; UI `CompressorMapPanel` dans ResultsRail / SimulationPanel.
 - **Smoke** : `scripts/nova/smoke-ipopt-escalation.sh`.
+
+---
+
+## 18. Unification chaîne NoVa (août 2026)
+
+Cycles review/correction (interface + workflow, **pas** le Newton GasLib-582) :
+
+- **Source unique** carte / Espace d'analyse : `demandOverrides`, `startValidation`, `applySinkReduction`, `applyAllCapacityReductions`.
+- **Q = 0 explicite** : `toSinkOverrideFlow(0) → 0` (pas `-0`) ; merge backend `insert(0)` sur le Q scénario ; sliders conservent une coupure déjà posée.
+- **Table capacité** : conservée à la re-validation de la **même** nomination (Camille peut Enregistrer après Réduire) ; vidée si la nomination change ou au reset.
+- **`scenarioDirty` vs `scenarioStale`** : bannières seulement après un run ; N-1 exige que la nomination active soit celle du dernier run (y compris « jamais validée »).
+- **Slider soutirages** : plafond ≥ |override| (une réduction > 20 Nm³/s n'est plus rabattue à 20).
+- **Sink Q ≈ 0** dans l'étude capacité : `feasible_fraction = 1` (pas une cible « Réduire »).
+- **Détails techniques** (582 P/Q) repliés sous NoVa ; lancement via « Valider la nomination ».
+
+**Limite scientifique inchangée** : `NotSolvedLocal` sur `mild_618` avec le Newton in-repo n'est pas un bug UI (voir `docs/science/limitations.md` §2.2). L'étude `/api/nova/capacity` lit le `.scn` fichier, pas les overrides de session.
 

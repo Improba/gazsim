@@ -61,6 +61,14 @@
     <q-expansion-item
       dense
       dark
+      icon="tune"
+      label="Réglages avancés"
+      class="q-mb-sm bg-grey-10 rounded-borders"
+    >
+      <div class="q-pa-sm">
+    <q-expansion-item
+      dense
+      dark
       icon="science"
       label="Composition gaz"
       class="q-mb-md bg-grey-10 rounded-borders"
@@ -127,7 +135,7 @@
       </div>
     </q-expansion-item>
 
-    <DemandControls v-model="demandOverrides" />
+    <DemandControls v-model="simulateStore.demandOverrides" />
 
     <ScenarioPanel
       @demands-resolved="onScenarioDemands"
@@ -138,20 +146,7 @@
 
     <CompareNominationsPanel />
 
-    <EquipmentControls v-model="equipmentOverrides" />
-
-    <q-banner
-      v-if="demandsDirty || equipmentDirty || scenarioDirty"
-      dense
-      rounded
-      class="bg-amber-10 text-amber-2 q-mb-sm"
-    >
-      <template #avatar>
-        <q-icon name="info" />
-      </template>
-      <span v-if="scenarioDirty">Nomination modifiée — relancez pour re-valider la tenue pression.</span>
-      <span v-else>{{ MODIFIED_WITHDRAWALS_EQUIPMENT_BANNER }}</span>
-    </q-banner>
+    <EquipmentControls v-model="simulateStore.equipmentOverrides" />
 
     <div class="row items-center q-mb-xs">
       <span class="text-caption text-grey-4">Mode de calcul</span>
@@ -164,7 +159,7 @@
       </q-icon>
     </div>
     <q-btn-toggle
-      v-model="simulationMode"
+      v-model="simulateStore.simulationMode"
       :options="[
         { label: 'Standard', value: 'free' },
         { label: 'Vérifier', value: 'check' },
@@ -185,10 +180,25 @@
       :disable="simulateStore.loading"
     >
       <q-tooltip max-width="300px">
-        Enchaîne des paliers de demande (10 % → 30 % → 100 %) pour faciliter la convergence
+        Enchaîne des paliers de soutirage (10 % → 30 % → 100 %) pour faciliter la convergence
         sur les grands réseaux transport.
       </q-tooltip>
     </q-toggle>
+      </div>
+    </q-expansion-item>
+
+    <q-banner
+      v-if="simulateStore.inputDirty"
+      dense
+      rounded
+      class="bg-amber-10 text-amber-2 q-mb-sm"
+    >
+      <template #avatar>
+        <q-icon name="info" />
+      </template>
+      <span v-if="simulateStore.scenarioDirty">Nomination modifiée — relancez pour re-valider la tenue pression.</span>
+      <span v-else>{{ MODIFIED_WITHDRAWALS_EQUIPMENT_BANNER }}</span>
+    </q-banner>
 
     <q-banner
       v-if="simulateStore.continuationLabel"
@@ -208,7 +218,7 @@
           class="full-width"
           :loading="simulateStore.loading"
           :disable="networkStore.nodes.length === 0"
-          @click="startSimulation"
+          @click="simulateStore.startValidation()"
         />
       </div>
       <div class="col">
@@ -238,7 +248,7 @@
           flat
           dense
           color="white"
-          label="Mode continuation"
+          label="Convergence renforcée"
           :disable="simulateStore.loading || !simulateStore.hasLastRun || networkStore.nodes.length === 0"
           @click="simulateStore.rerunWithRobustMode()"
         />
@@ -248,7 +258,7 @@
           color="white"
           label="Relancer"
           :disable="simulateStore.loading || networkStore.nodes.length === 0"
-          @click="startSimulation"
+          @click="simulateStore.startValidation()"
         />
       </template>
     </q-banner>
@@ -276,7 +286,15 @@
     </template>
 
     <q-separator dark class="q-my-sm" />
-    <LogPanel />
+    <q-expansion-item
+      dense
+      dark
+      icon="article"
+      label="Journal de calcul"
+      class="bg-grey-10 rounded-borders"
+    >
+      <LogPanel />
+    </q-expansion-item>
   </div>
 </template>
 
@@ -301,10 +319,8 @@ import { useNominationStore } from 'src/stores/nomination';
 import { useSimulateStore } from 'src/stores/simulate';
 import { useEditorStore } from 'src/stores/editor';
 import { useTimeseriesStore } from 'src/stores/timeseries';
-import { useContingencyStore } from 'src/stores/contingency';
 import { resetStudyState } from 'src/utils/resetStudyState';
-import type { WsStartOptions } from 'src/services/ws';
-import { G20_NOMINAL, PURE_CH4, type GasCompositionDto, type PipeEquipmentDto } from 'src/services/api';
+import { G20_NOMINAL, PURE_CH4, type GasCompositionDto } from 'src/services/api';
 import { SIMULATION_MODE_HELP } from 'src/utils/simulationStatus';
 import { MODIFIED_WITHDRAWALS_EQUIPMENT_BANNER } from 'src/utils/novaLabels';
 import { runDemoCase } from 'src/utils/demoCase';
@@ -316,21 +332,15 @@ const simulateStore = useSimulateStore();
 const editorStore = useEditorStore();
 const timeseriesStore = useTimeseriesStore();
 const nominationStore = useNominationStore();
-const contingencyStore = useContingencyStore();
 const { enabled: novaWorkflowEnabled, currentStep: novaCurrentStep } = useNovaWorkflow();
 
 const route = useRoute();
 const comparePanelOpen = computed(() => route.query.compare === '1');
-const demandOverrides = ref<Record<string, number>>({});
-const equipmentOverrides = ref<Record<string, PipeEquipmentDto>>({});
 const novaScenarioId = computed(() => nominationStore.activeId);
 const selectedNetwork = ref<string | null>(null);
-const simulationMode = ref<'free' | 'check' | 'optimize'>('free');
 const gasDraft = ref<GasCompositionDto>({ ...G20_NOMINAL });
 const gasApplying = ref(false);
 const demoLoading = ref(false);
-const lastRunDemandKey = ref('');
-const lastRunEquipmentKey = ref('');
 
 const gasFields = [
   { key: 'ch4' as const, label: 'CH₄' },
@@ -358,43 +368,9 @@ const canLoadNetwork = computed(
     !simulateStore.loading,
 );
 
-function demandKey(demands: Record<string, number>): string {
-  return JSON.stringify(
-    Object.entries(demands).sort(([a], [b]) => a.localeCompare(b)),
-  );
-}
-
-function equipmentKey(overrides: Record<string, PipeEquipmentDto>): string {
-  return JSON.stringify(
-    Object.entries(overrides).sort(([a], [b]) => a.localeCompare(b)),
-  );
-}
-
-const equipmentDirty = computed(() => {
-  if (simulateStore.status === 'running') {
-    return false;
-  }
-  if (!lastRunEquipmentKey.value) {
-    return Object.keys(equipmentOverrides.value).length > 0;
-  }
-  return equipmentKey(equipmentOverrides.value) !== lastRunEquipmentKey.value;
-});
-
-const scenarioDirty = computed(() => simulateStore.scenarioDirty);
-
 const launchLabel = computed(() =>
   novaScenarioId.value ? 'Valider la nomination' : 'Lancer',
 );
-
-const demandsDirty = computed(() => {
-  if (simulateStore.status === 'running') {
-    return false;
-  }
-  if (!lastRunDemandKey.value) {
-    return Object.keys(demandOverrides.value).length > 0;
-  }
-  return demandKey(demandOverrides.value) !== lastRunDemandKey.value;
-});
 
 onMounted(async () => {
   try {
@@ -419,36 +395,12 @@ watch(
   },
 );
 
-// Changer de nomination NoVa réinitialise les surcharges de demande locales :
-// elles correspondent à l'ancien jeu de points de livraison et n'ont plus de sens.
-watch(
-  () => nominationStore.activeId,
-  () => {
-    demandOverrides.value = {};
-    equipmentOverrides.value = {};
-    lastRunDemandKey.value = '';
-    lastRunEquipmentKey.value = '';
-    contingencyStore.reset();
-  },
-);
-
 watch(
   () => networkStore.gas.composition,
   (composition) => {
     gasDraft.value = { ...composition };
   },
   { immediate: true, deep: true },
-);
-
-// Ne marquer les overrides « propres » qu'après convergence réelle.
-watch(
-  () => simulateStore.status,
-  (status) => {
-    if (status === 'converged') {
-      lastRunDemandKey.value = demandKey(demandOverrides.value);
-      lastRunEquipmentKey.value = equipmentKey(equipmentOverrides.value);
-    }
-  },
 );
 
 function applyPreset(preset: 'g20' | 'ch4') {
@@ -471,7 +423,7 @@ async function applyGasComposition() {
 }
 
 function onScenarioDemands(demands: Record<string, number>) {
-  demandOverrides.value = { ...demands };
+  simulateStore.demandOverrides = { ...demands };
 }
 
 function onTimeseriesFinished() {
@@ -502,55 +454,12 @@ function runCapacityStudy() {
   void simulateStore.runSinkCapacity(ids.length > 0 ? ids : undefined);
 }
 
-function reduceScenarioId(): string | null {
-  return simulateStore.activeScenarioId ?? nominationStore.activeId;
-}
-
-function buildReduceRunOptions() {
-  const scenarioId = reduceScenarioId();
-  const opts: WsStartOptions = {
-    gas_composition: { ...networkStore.gas.composition },
-  };
-  if (scenarioId) {
-    opts.scenario_id = scenarioId;
-  }
-  if (simulationMode.value !== 'free') {
-    opts.mode = simulationMode.value;
-    const bounds: Record<string, { min: number; max: number }> = {};
-    for (const node of networkStore.nodes) {
-      if (node.flow_min_m3s != null && node.flow_max_m3s != null) {
-        bounds[node.id] = { min: node.flow_min_m3s, max: node.flow_max_m3s };
-      }
-    }
-    opts.capacity_bounds = bounds;
-  }
-  return opts;
-}
-
-/** Overrides partiels : le backend fusionne sur les demandes du scénario actif. */
 function onReduceSink(sinkId: string, maxFeasibleQ: number) {
-  const demands = {
-    ...(simulateStore.lastInputDemands() ?? {}),
-    ...demandOverrides.value,
-    [sinkId]: -Math.abs(maxFeasibleQ),
-  };
-  demandOverrides.value = { ...demandOverrides.value, [sinkId]: -Math.abs(maxFeasibleQ) };
-  void simulateStore.runSimulation(demands, buildReduceRunOptions(), equipmentOverrides.value);
+  void simulateStore.applySinkReduction(sinkId, maxFeasibleQ);
 }
 
-/** Overrides partiels : le backend fusionne sur les demandes du scénario actif. */
 function onReduceAll() {
-  const next = {
-    ...(simulateStore.lastInputDemands() ?? {}),
-    ...demandOverrides.value,
-  };
-  for (const r of simulateStore.sinkCapacity) {
-    if (r.feasible_fraction < 1) {
-      next[r.sink_id] = -Math.abs(r.max_feasible_q_m3s);
-    }
-  }
-  demandOverrides.value = next;
-  void simulateStore.runSimulation(next, buildReduceRunOptions(), equipmentOverrides.value);
+  void simulateStore.applyAllCapacityReductions();
 }
 
 async function onSaveReduced(demands: Record<string, number>) {
@@ -569,50 +478,11 @@ async function onSaveReduced(demands: Record<string, number>) {
   }
 }
 
-function startSimulation() {
-  const demands = Object.keys(demandOverrides.value).length > 0
-    ? demandOverrides.value
-    : undefined;
-
-  simulateStore.setRunScenarioSummary(
-    demands
-      ? { description: 'Demandes manuelles (panneau Simulation)' }
-      : { description: 'Régime nominal du réseau' },
-  );
-
-  const opts: WsStartOptions = {
-    gas_composition: { ...networkStore.gas.composition },
-  };
-  if (novaScenarioId.value) {
-    opts.scenario_id = novaScenarioId.value;
-  }
-  if (simulationMode.value !== 'free') {
-    opts.mode = simulationMode.value;
-    const bounds: Record<string, { min: number; max: number }> = {};
-    for (const node of networkStore.nodes) {
-      if (node.flow_min_m3s != null && node.flow_max_m3s != null) {
-        bounds[node.id] = { min: node.flow_min_m3s, max: node.flow_max_m3s };
-      }
-    }
-    opts.capacity_bounds = bounds;
-  }
-
-  simulateStore.runSimulation(
-    demands,
-    opts,
-    Object.keys(equipmentOverrides.value).length > 0 ? equipmentOverrides.value : undefined,
-  );
-}
-
 async function loadSelectedNetwork() {
   if (!selectedNetwork.value || selectedNetwork.value === networkStore.activeNetwork) {
     return;
   }
   await networkStore.selectNetwork(selectedNetwork.value);
-  demandOverrides.value = {};
-  equipmentOverrides.value = {};
-  lastRunDemandKey.value = '';
-  lastRunEquipmentKey.value = '';
   resetStudyState();
 }
 

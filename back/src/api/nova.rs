@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     ApiError, SharedState, active_dataset_id, active_gas_composition, active_network,
-    sync_compressor_map_mode_for_solve,
+    resolve_simulation_demands, sync_compressor_map_mode_for_solve,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -91,13 +91,20 @@ pub(super) async fn post_nova_capacity(
     Json(payload): Json<NovaCapacityRequest>,
 ) -> Result<Json<Vec<crate::solver::SinkCapacityReport>>, (StatusCode, Json<ApiError>)> {
     let dataset_id = active_dataset_id(&state);
-    let scenario_xml = super::resolve_scenario_xml(&state, &dataset_id, &payload.scenario_id)
+    let scenario_id = payload.scenario_id.trim();
+    if scenario_id.is_empty() {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "scenario_id must not be empty",
+        ));
+    }
+    let scenario_xml = super::resolve_scenario_xml(&state, &dataset_id, scenario_id)
         .ok_or_else(|| {
             api_error(
                 StatusCode::NOT_FOUND,
                 format!(
                     "scénario {} introuvable pour le dataset {}",
-                    payload.scenario_id, dataset_id
+                    scenario_id, dataset_id
                 ),
             )
         })?;
@@ -317,13 +324,14 @@ pub(super) async fn post_reduced_nomination(
     }
 
     let dataset_id = super::active_dataset_id(&state);
-    let base_xml = super::resolve_scenario_xml(&state, &dataset_id, &payload.base_scenario_id)
+    let base_scenario_id = payload.base_scenario_id.trim().to_string();
+    let base_xml = super::resolve_scenario_xml(&state, &dataset_id, &base_scenario_id)
         .ok_or_else(|| {
             api_error(
                 StatusCode::NOT_FOUND,
                 format!(
                     "scénario {} introuvable pour le dataset {}",
-                    payload.base_scenario_id, dataset_id
+                    base_scenario_id, dataset_id
                 ),
             )
         })?;
@@ -341,19 +349,16 @@ pub(super) async fn post_reduced_nomination(
         ));
     }
 
-    let stem = reduced_nomination_stem(&payload.base_scenario_id);
-    let filename = payload
+    let stem = reduced_nomination_stem(&base_scenario_id);
+    let mut filename = payload
         .filename
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
         .unwrap_or_else(|| format!("{stem}_reduit.scn"));
-    if !filename.ends_with(".scn") {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "filename must end with .scn",
-        ));
+    if !filename.to_ascii_lowercase().ends_with(".scn") {
+        filename.push_str(".scn");
     }
 
     let ts = now_ms();
@@ -422,6 +427,12 @@ pub(super) struct NominationSolveOutcome {
     pub pressure_slips: Vec<crate::solver::ScenarioPressureSlip>,
     pub iterations: usize,
     pub residual: f64,
+    #[serde(default)]
+    pub solver_signature: String,
+    #[serde(default)]
+    pub solver_established: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demand_scale_achieved: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -439,22 +450,161 @@ pub(super) struct CompareNominationsResponse {
     pub pipes_compared: usize,
 }
 
-/// Résout une nomination NoVa (steady-state + diagnostics + verdict) pour comparaison.
-/// Version simplifiée du pipeline WS (sans routage CDF transport) : adaptée à l'analyse
-/// comparative de scénarios sur le réseau actif.
-fn run_nova_solve_for_compare(
+const NOVA_VALIDATE_LIMITATIONS: &[&str] = &[
+    "GazFlow est un outil d'étude comparative, non certifié.",
+    "NotSolvedLocal ne prouve pas l'infaisabilité physique.",
+];
+
+#[derive(Debug, Deserialize)]
+pub(super) struct ValidateNominationRequest {
+    pub scenario_id: String,
+    /// Overrides de soutirage (Nm³/s). Un `0` explicite coupe le sink.
+    #[serde(default)]
+    pub demands: Option<HashMap<String, f64>>,
+    #[serde(default)]
+    pub robust_mode: Option<bool>,
+    #[serde(default)]
+    pub max_iter: Option<usize>,
+    #[serde(default)]
+    pub tolerance: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct CompactDeficit {
+    pub node_id: String,
+    pub solved_pressure_bar: f64,
+    pub required_lower_bar: Option<f64>,
+    pub shortfall_bar: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct NovaValidateResponse {
+    pub ok: bool,
+    pub network_id: String,
+    pub nomination_id: String,
+    pub feasible: bool,
+    pub cause: String,
+    pub deficit_sinks: Vec<String>,
+    pub solver_signature: String,
+    pub solver_established: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub demand_scale_achieved: Option<f64>,
+    pub min_pressure_bar: f64,
+    pub max_pressure_bar: f64,
+    pub worst_shortfall_bar: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worst_sink: Option<String>,
+    pub deficit_details: Vec<CompactDeficit>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub applied_overrides: HashMap<String, f64>,
+    pub limitations: Vec<String>,
+}
+
+fn nova_cause_label(cause: crate::solver::NovaCause) -> &'static str {
+    match cause {
+        crate::solver::NovaCause::Feasible => "Feasible",
+        crate::solver::NovaCause::PressureDeficit => "PressureDeficit",
+        crate::solver::NovaCause::PressureExcess => "PressureExcess",
+        crate::solver::NovaCause::PressureReachability => "PressureReachability",
+        crate::solver::NovaCause::NotSolvedLocal => "NotSolvedLocal",
+        crate::solver::NovaCause::ScaleNotAchieved => "ScaleNotAchieved",
+    }
+}
+
+fn nova_signature_label(signature: crate::solver::NovaSolverSignature) -> &'static str {
+    match signature {
+        crate::solver::NovaSolverSignature::NewtonPosthoc => "NewtonPosthoc",
+        crate::solver::NovaSolverSignature::IpoptEscalation => "IpoptEscalation",
+        crate::solver::NovaSolverSignature::Unresolved => "Unresolved",
+    }
+}
+
+fn demands_have_non_finite(demands: &HashMap<String, f64>) -> bool {
+    demands.values().any(|value| !value.is_finite())
+}
+
+fn compact_validate_response(
+    network_id: String,
+    nomination_id: String,
+    outcome: &NominationSolveOutcome,
+    applied_overrides: HashMap<String, f64>,
+    demand_scale_achieved: Option<f64>,
+    solver_signature: &str,
+    solver_established: bool,
+) -> NovaValidateResponse {
+    let mut min_p = f64::INFINITY;
+    let mut max_p = f64::NEG_INFINITY;
+    for pressure in outcome.pressures.values() {
+        if pressure.is_finite() && *pressure > 0.0 {
+            min_p = min_p.min(*pressure);
+            max_p = max_p.max(*pressure);
+        }
+    }
+    if !min_p.is_finite() {
+        min_p = 0.0;
+        max_p = 0.0;
+    }
+
+    let mut deficit_details: Vec<CompactDeficit> = outcome
+        .pressure_slips
+        .iter()
+        .filter(|slip| slip.shortfall_bar > 0.0)
+        .map(|slip| CompactDeficit {
+            node_id: slip.node_id.clone(),
+            solved_pressure_bar: slip.solved_pressure_bar,
+            required_lower_bar: slip.lower_bar,
+            shortfall_bar: slip.shortfall_bar,
+        })
+        .collect();
+    deficit_details.sort_by(|a, b| b.shortfall_bar.total_cmp(&a.shortfall_bar));
+    deficit_details.truncate(12);
+
+    let (worst_sink, worst_shortfall_bar) = deficit_details
+        .first()
+        .map(|row| (Some(row.node_id.clone()), row.shortfall_bar))
+        .unwrap_or((None, 0.0));
+
+    let mut limitations: Vec<String> = NOVA_VALIDATE_LIMITATIONS
+        .iter()
+        .map(|item| (*item).to_string())
+        .collect();
+    if outcome.cause == "NotSolvedLocal" {
+        limitations.push(
+            "Le Newton local n'a pas établi de point de fonctionnement ; ne pas conclure à l'infaisabilité."
+                .to_string(),
+        );
+    }
+
+    NovaValidateResponse {
+        ok: true,
+        network_id,
+        nomination_id,
+        feasible: outcome.feasible,
+        cause: outcome.cause.clone(),
+        deficit_sinks: outcome.deficit_sinks.clone(),
+        solver_signature: solver_signature.to_string(),
+        solver_established,
+        demand_scale_achieved,
+        min_pressure_bar: min_p,
+        max_pressure_bar: max_p,
+        worst_shortfall_bar,
+        worst_sink,
+        deficit_details,
+        applied_overrides,
+        limitations,
+    }
+}
+
+/// Résout une nomination NoVa avec des demandes déjà fusionnées (overrides y compris Q=0).
+fn run_nova_solve_with_demands(
     network: &crate::graph::GasNetwork,
     scenario: &crate::gaslib::ScenarioDemands,
+    demands: &HashMap<String, f64>,
     gas: crate::solver::GasComposition,
     max_iter: usize,
     tolerance: f64,
     robust: bool,
 ) -> Result<NominationSolveOutcome, String> {
-    let demands = crate::gaslib::effective_solver_demands_for_network(
-        network,
-        &scenario.demands,
-        scenario,
-    );
     let preset = crate::solver::preset_from_request(
         network.node_count(),
         robust,
@@ -487,24 +637,64 @@ fn run_nova_solve_for_compare(
         preset.tolerance,
         &result,
     );
-    let cause = match verdict.cause {
-        crate::solver::NovaCause::Feasible => "Feasible",
-        crate::solver::NovaCause::PressureDeficit => "PressureDeficit",
-        crate::solver::NovaCause::PressureExcess => "PressureExcess",
-        crate::solver::NovaCause::PressureReachability => "PressureReachability",
-        crate::solver::NovaCause::NotSolvedLocal => "NotSolvedLocal",
-        crate::solver::NovaCause::ScaleNotAchieved => "ScaleNotAchieved",
-    };
     Ok(NominationSolveOutcome {
         scenario_id: String::new(),
         feasible: verdict.feasible,
-        cause: cause.to_string(),
+        cause: nova_cause_label(verdict.cause).to_string(),
         deficit_sinks: verdict.deficit_sinks.clone(),
         pressures: result.pressures.clone(),
         flows: result.flows.clone(),
         pressure_slips: diag.pressure_slips,
         iterations: result.iterations,
         residual: result.residual,
+        solver_signature: nova_signature_label(verdict.solver_signature).to_string(),
+        solver_established: verdict.converged,
+        demand_scale_achieved: verdict.demand_scale_achieved,
+    })
+}
+
+/// Résout une nomination NoVa (steady-state + diagnostics + verdict) pour comparaison.
+/// Version simplifiée du pipeline WS (sans routage CDF transport) : adaptée à l'analyse
+/// comparative de scénarios sur le réseau actif.
+fn run_nova_solve_for_compare(
+    network: &crate::graph::GasNetwork,
+    scenario: &crate::gaslib::ScenarioDemands,
+    gas: crate::solver::GasComposition,
+    max_iter: usize,
+    tolerance: f64,
+    robust: bool,
+) -> Result<NominationSolveOutcome, String> {
+    let demands = crate::gaslib::effective_solver_demands_for_network(
+        network,
+        &scenario.demands,
+        scenario,
+    );
+    run_nova_solve_with_demands(
+        network, scenario, &demands, gas, max_iter, tolerance, robust,
+    )
+}
+
+/// Newton non convergé → verdict compact NotSolvedLocal (pas une 422 HTTP).
+fn outcome_from_unconverged_solve(
+    scenario_id: String,
+    err: String,
+) -> Result<NominationSolveOutcome, String> {
+    if !err.contains("did not converge") {
+        return Err(err);
+    }
+    Ok(NominationSolveOutcome {
+        scenario_id,
+        feasible: false,
+        cause: "NotSolvedLocal".to_string(),
+        deficit_sinks: Vec::new(),
+        pressures: HashMap::new(),
+        flows: HashMap::new(),
+        pressure_slips: Vec::new(),
+        iterations: 0,
+        residual: 0.0,
+        solver_signature: "Unresolved".to_string(),
+        solver_established: false,
+        demand_scale_achieved: None,
     })
 }
 
@@ -520,26 +710,33 @@ pub(super) async fn post_compare_nominations(
     let tolerance = payload.tolerance.unwrap_or(1e-3);
     let robust = payload.robust_mode.unwrap_or(true);
 
-    let xml_a = super::resolve_scenario_xml(&state, &dataset_id, &payload.scenario_a_id)
-        .ok_or_else(|| {
-            api_error(
-                StatusCode::NOT_FOUND,
-                format!(
-                    "scénario {} introuvable pour le dataset {}",
-                    payload.scenario_a_id, dataset_id
-                ),
-            )
-        })?;
-    let xml_b = super::resolve_scenario_xml(&state, &dataset_id, &payload.scenario_b_id)
-        .ok_or_else(|| {
-            api_error(
-                StatusCode::NOT_FOUND,
-                format!(
-                    "scénario {} introuvable pour le dataset {}",
-                    payload.scenario_b_id, dataset_id
-                ),
-            )
-        })?;
+    let a_id = payload.scenario_a_id.trim().to_string();
+    let b_id = payload.scenario_b_id.trim().to_string();
+    if a_id.is_empty() || b_id.is_empty() {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "scenario_a_id and scenario_b_id must not be empty",
+        ));
+    }
+
+    let xml_a = super::resolve_scenario_xml(&state, &dataset_id, &a_id).ok_or_else(|| {
+        api_error(
+            StatusCode::NOT_FOUND,
+            format!(
+                "scénario {} introuvable pour le dataset {}",
+                a_id, dataset_id
+            ),
+        )
+    })?;
+    let xml_b = super::resolve_scenario_xml(&state, &dataset_id, &b_id).ok_or_else(|| {
+        api_error(
+            StatusCode::NOT_FOUND,
+            format!(
+                "scénario {} introuvable pour le dataset {}",
+                b_id, dataset_id
+            ),
+        )
+    })?;
 
     let network_for_solve = (*network).clone();
     let pool = state.rayon_pool.clone();
@@ -554,8 +751,6 @@ pub(super) async fn post_compare_nominations(
             )
         })?;
 
-    let a_id = payload.scenario_a_id.clone();
-    let b_id = payload.scenario_b_id.clone();
     let state_for_mode = state.clone();
     let join = tokio::task::spawn_blocking(move || {
         let _permit = permit;
@@ -638,6 +833,111 @@ pub(super) async fn post_compare_nominations(
         nodes_compared: all_p.len(),
         pipes_compared: all_q.len(),
     }))
+}
+
+/// `POST /api/nova/validate` : verdict NoVa compact (sans cartes P/Q) pour un agent HTTP.
+pub(super) async fn post_nova_validate(
+    State(state): State<SharedState>,
+    Json(payload): Json<ValidateNominationRequest>,
+) -> Result<Json<NovaValidateResponse>, (StatusCode, Json<ApiError>)> {
+    if payload.scenario_id.trim().is_empty() {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "scenario_id must not be empty",
+        ));
+    }
+    if let Some(demands) = payload.demands.as_ref() {
+        if demands_have_non_finite(demands) {
+            return Err(api_error(
+                StatusCode::BAD_REQUEST,
+                "demands must be finite numbers (explicit 0 is a shut-off)",
+            ));
+        }
+    }
+
+    let scenario_id = payload.scenario_id.trim().to_string();
+    let dataset_id = active_dataset_id(&state);
+    let _xml = super::resolve_scenario_xml(&state, &dataset_id, &scenario_id).ok_or_else(
+        || {
+            api_error(
+                StatusCode::NOT_FOUND,
+                format!(
+                    "scénario {} introuvable pour le dataset {}",
+                    scenario_id, dataset_id
+                ),
+            )
+        },
+    )?;
+
+    let network = active_network(&state);
+    let gas = active_gas_composition(&state);
+    let max_iter = payload.max_iter.unwrap_or(400);
+    let tolerance = payload.tolerance.unwrap_or(1e-3);
+    let robust = payload.robust_mode.unwrap_or(true);
+    let applied_overrides = payload.demands.clone().unwrap_or_default();
+
+    let (demands, scenario) = resolve_simulation_demands(
+        &state,
+        &network,
+        Some(scenario_id.as_str()),
+        payload.demands.as_ref(),
+    )
+    .map_err(|err| api_error(StatusCode::UNPROCESSABLE_ENTITY, err))?;
+    let Some(scenario) = scenario else {
+        return Err(api_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "scénario NoVa introuvable après résolution",
+        ));
+    };
+
+    let permit = state
+        .simulation_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| {
+            api_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "simulation capacity reached, retry later",
+            )
+        })?;
+
+    let pool = state.rayon_pool.clone();
+    let state_for_mode = state.clone();
+    let network_for_solve = (*network).clone();
+    let join = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        pool.install(|| {
+            sync_compressor_map_mode_for_solve(&state_for_mode);
+            run_nova_solve_with_demands(
+                &network_for_solve,
+                &scenario,
+                &demands,
+                gas,
+                max_iter,
+                tolerance,
+                robust,
+            )
+        })
+    })
+    .await
+    .map_err(|err| api_error(StatusCode::INTERNAL_SERVER_ERROR, format!("join: {err}")))?;
+
+    let mut outcome = match join {
+        Ok(outcome) => outcome,
+        Err(err) => outcome_from_unconverged_solve(scenario_id.clone(), err)
+            .map_err(|err| api_error(StatusCode::UNPROCESSABLE_ENTITY, err))?,
+    };
+    outcome.scenario_id = scenario_id.clone();
+
+    Ok(Json(compact_validate_response(
+        dataset_id,
+        scenario_id,
+        &outcome,
+        applied_overrides,
+        outcome.demand_scale_achieved,
+        &outcome.solver_signature,
+        outcome.solver_established,
+    )))
 }
 
 fn collect_scenarios(base: &Path, dir: &Path, out: &mut Vec<NovaScenarioSummary>) {
@@ -994,8 +1294,9 @@ mod tests {
 
         // Create reduced nomination from base.
         let reduced = serde_json::json!({
-            "base_scenario_id": base_id,
+            "base_scenario_id": format!("  {base_id}  "),
             "reduced_demands": { "exit01": -20.0 },
+            "filename": "nom_coupe",
         });
         let req = Request::builder()
             .method("POST")
@@ -1010,6 +1311,7 @@ mod tests {
         let reduced_id = v["id"].as_str().unwrap().to_string();
         assert!(reduced_id.contains("_reduit-"));
         assert_eq!(v["source"].as_str(), Some("imported"));
+        assert_eq!(v["filename"].as_str(), Some("nom_coupe.scn"));
 
         // Listed in scenarios.
         let req = Request::builder()
@@ -1168,6 +1470,211 @@ mod tests {
         assert!(v["delta_pressures"].is_object());
         assert!(v["max_abs_delta_p_bar"].is_number());
         assert_eq!(v["nodes_compared"].as_u64(), Some(2));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn compact_validate_response_omits_nodal_maps_and_flags_not_solved_local() {
+        let outcome = NominationSolveOutcome {
+            scenario_id: "nom".into(),
+            feasible: false,
+            cause: "NotSolvedLocal".into(),
+            deficit_sinks: vec!["exit01".into()],
+            pressures: HashMap::from([("entry01".into(), 70.0), ("exit01".into(), 40.0)]),
+            flows: HashMap::from([("p1".into(), 10.0)]),
+            pressure_slips: vec![
+                crate::solver::ScenarioPressureSlip {
+                    node_id: "exit01".into(),
+                    solved_pressure_bar: 40.0,
+                    lower_bar: Some(50.0),
+                    upper_bar: None,
+                    shortfall_bar: 10.0,
+                    excess_bar: 0.0,
+                    from_scenario_envelope: true,
+                    shortpipe_partner_id: None,
+                },
+                crate::solver::ScenarioPressureSlip {
+                    node_id: "exit02".into(),
+                    solved_pressure_bar: 48.0,
+                    lower_bar: Some(50.0),
+                    upper_bar: None,
+                    shortfall_bar: 2.0,
+                    excess_bar: 0.0,
+                    from_scenario_envelope: true,
+                    shortpipe_partner_id: None,
+                },
+            ],
+            iterations: 12,
+            residual: 1.0,
+            solver_signature: "Unresolved".into(),
+            solver_established: false,
+            demand_scale_achieved: None,
+        };
+        let json = serde_json::to_value(compact_validate_response(
+            "GasLib-11".into(),
+            "nom".into(),
+            &outcome,
+            HashMap::from([("exit01".into(), 0.0)]),
+            None,
+            &outcome.solver_signature,
+            outcome.solver_established,
+        ))
+        .unwrap();
+        assert_eq!(json["ok"], true);
+        assert_eq!(json["feasible"], false);
+        assert_eq!(json["cause"], "NotSolvedLocal");
+        assert_eq!(json["network_id"], "GasLib-11");
+        assert_eq!(json["nomination_id"], "nom");
+        assert_eq!(json["applied_overrides"]["exit01"], 0.0);
+        assert_eq!(json["worst_sink"], "exit01");
+        assert_eq!(json["worst_shortfall_bar"], 10.0);
+        assert!(json["pressures"].is_null());
+        assert!(json["flows"].is_null());
+        assert!(json["limitations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item.as_str().unwrap().contains("infaisabilité")));
+    }
+
+    #[tokio::test]
+    async fn post_nova_validate_returns_404_for_unknown_scenario() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use std::collections::HashMap;
+        use tower::ServiceExt;
+
+        let tmp = scratch_dir_for("validate404");
+        let app = crate::api::create_router_with_runtime_limits_and_datasets(
+            micro_network(),
+            HashMap::new(),
+            "test".to_string(),
+            vec!["test".to_string()],
+            tmp.clone(),
+            2,
+            1,
+        );
+
+        let body = serde_json::json!({ "scenario_id": "does_not_exist" });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/nova/validate")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn post_nova_validate_rejects_empty_id_and_non_finite_demands() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use std::collections::HashMap;
+        use tower::ServiceExt;
+
+        let tmp = scratch_dir_for("validate400");
+        let app = crate::api::create_router_with_runtime_limits_and_datasets(
+            micro_network(),
+            HashMap::new(),
+            "test".to_string(),
+            vec!["test".to_string()],
+            tmp.clone(),
+            2,
+            1,
+        );
+
+        let empty = serde_json::json!({ "scenario_id": "  " });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/nova/validate")
+            .header("content-type", "application/json")
+            .body(Body::from(empty.to_string()))
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+
+        let nan = r#"{"scenario_id":"any","demands":{"exit01":NaN}}"#;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/nova/validate")
+            .header("content-type", "application/json")
+            .body(Body::from(nan))
+            .unwrap();
+        assert_eq!(
+            app.oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn post_nova_validate_returns_compact_verdict_and_keeps_explicit_zero() {
+        use axum::body::{Body, to_bytes};
+        use axum::http::{Request, StatusCode};
+        use std::collections::HashMap;
+        use tower::ServiceExt;
+
+        let tmp = scratch_dir_for("validate-ok");
+        let app = crate::api::create_router_with_runtime_limits_and_datasets(
+            micro_network(),
+            HashMap::new(),
+            "test".to_string(),
+            vec!["test".to_string()],
+            tmp.clone(),
+            2,
+            1,
+        );
+
+        let body = serde_json::json!({
+            "filename": "nom_validate.scn",
+            "xml": scn_xml("50.00"),
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/nova/nominations")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let imported: serde_json::Value =
+            serde_json::from_slice(&to_bytes(resp.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        let nomination_id = imported["id"].as_str().unwrap().to_string();
+
+        let body = serde_json::json!({
+            "scenario_id": format!("  {nomination_id}  "),
+            "demands": { "exit01": 0.0 },
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/nova/validate")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let status = resp.status();
+        let v: serde_json::Value =
+            serde_json::from_slice(&to_bytes(resp.into_body(), usize::MAX).await.unwrap()).unwrap();
+        assert_eq!(status, StatusCode::OK, "validate failed: {v}");
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["nomination_id"], nomination_id);
+        assert!(v["cause"].is_string());
+        assert!(v["solver_signature"].is_string());
+        assert!(v["min_pressure_bar"].is_number());
+        assert!(v["max_pressure_bar"].is_number());
+        assert!(v["deficit_details"].is_array());
+        assert!(v["limitations"].as_array().unwrap().len() >= 2);
+        assert_eq!(v["applied_overrides"]["exit01"], 0.0);
+        assert!(v.get("pressures").is_none());
+        assert!(v.get("flows").is_none());
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

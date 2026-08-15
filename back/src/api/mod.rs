@@ -265,6 +265,7 @@ pub fn create_router_with_repo_and_datasets(
         .route("/api/nova/scenarios", get(nova::list_nova_scenarios))
         .route("/api/nova/capacity", post(nova::post_nova_capacity))
         .route("/api/nova/compare", post(nova::post_compare_nominations))
+        .route("/api/nova/validate", post(nova::post_nova_validate))
         .route(
             "/api/batch/runs",
             get(batch::list_batch_runs).post(batch::post_batch_run),
@@ -475,7 +476,7 @@ struct TransientRequest {
 /// Valide le facteur de relaxation Picard optionnel pour le transitoire PDE.
 pub(super) fn validate_picard_relax(picard_relax: Option<f64>) -> Result<(), String> {
     if let Some(w) = picard_relax {
-        if !(w > 0.0 && w <= 1.0) {
+        if !(w.is_finite() && w > 0.0 && w <= 1.0) {
             return Err(format!(
                 "picard_relax must be in (0.0, 1.0], got {w}"
             ));
@@ -1218,6 +1219,14 @@ fn resolve_contingency_cases(
                     }),
                 ));
             };
+            if custom.is_empty() {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiError {
+                        error: "custom_cases must not be empty when scope=custom".to_string(),
+                    }),
+                ));
+            }
             custom
         }
     };
@@ -1296,10 +1305,15 @@ async fn compute_contingency_report(
     payload: ContingencyRequest,
 ) -> Result<solver::ContingencyReport, (StatusCode, Json<ApiError>)> {
     let network = active_network(state);
+    let scenario_id = payload
+        .scenario_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     let (demands, scenario) = resolve_contingency_demands(
         state,
         &network,
-        payload.scenario_id.as_deref(),
+        scenario_id,
         payload.demands.as_ref(),
     )?;
     let network_for_solve = scenario

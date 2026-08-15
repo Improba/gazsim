@@ -693,12 +693,14 @@ fn finish_pde_with_quasi_steady_fallback(
         .iter()
         .filter_map(|ev| shift_event_time(ev, time_s))
         .collect();
+    // Warm-start QS depuis le dernier champ PDE (évite un saut Newton à froid).
+    let warm = steps.last().map(|s| s.pressures.clone());
     let qs = match simulate_transient_quasi_steady_progress(
         network,
         demands,
         &shifted,
         &qs_cfg,
-        None,
+        warm.as_ref(),
         on_step,
     ) {
         Ok(qs) => qs,
@@ -1335,6 +1337,11 @@ fn validate_config(config: &TransientConfig) -> Result<()> {
     }
     if config.n_cells_per_pipe == Some(0) {
         bail!("n_cells_per_pipe must be >= 1");
+    }
+    if let Some(w) = config.picard_relax {
+        if !(w.is_finite() && w > 0.0 && w <= 1.0) {
+            bail!("picard_relax must be finite and in (0.0, 1.0], got {w}");
+        }
     }
     Ok(())
 }
@@ -2241,6 +2248,29 @@ mod tests {
         assert!(
             result.total_iterations > 0,
             "total_iterations should accumulate Picard effort before fallback"
+        );
+    }
+
+    #[test]
+    fn test_invalid_picard_relax_is_rejected() {
+        let net = two_node_network();
+        let mut demands = HashMap::new();
+        demands.insert("SK".to_string(), -2.0);
+        let mut cfg = transient_cfg(300.0, 60.0);
+        cfg.picard_relax = Some(0.0);
+        let err = simulate_transient_with_mode(
+            &net,
+            &demands,
+            &[],
+            &cfg,
+            TransientMode::Pde,
+            None,
+            None,
+        )
+        .expect_err("picard_relax=0 must be rejected");
+        assert!(
+            err.to_string().contains("picard_relax"),
+            "unexpected error: {err}"
         );
     }
 

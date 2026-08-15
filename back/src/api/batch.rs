@@ -230,13 +230,19 @@ pub(super) async fn post_batch_run(
         ));
     }
 
-    // Charge la nomination de base.
-    let xml = resolve_scenario_xml(&state, &dataset_id, &payload.base_scenario_id).ok_or_else(|| {
+    let base_scenario_id = payload.base_scenario_id.trim().to_string();
+    if base_scenario_id.is_empty() {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "base_scenario_id must not be empty",
+        ));
+    }
+    let xml = resolve_scenario_xml(&state, &dataset_id, &base_scenario_id).ok_or_else(|| {
         api_error(
             StatusCode::NOT_FOUND,
             format!(
                 "scénario {} introuvable pour le dataset {}",
-                payload.base_scenario_id, dataset_id
+                base_scenario_id, dataset_id
             ),
         )
     })?;
@@ -253,7 +259,6 @@ pub(super) async fn post_batch_run(
         })?;
 
     let network = active_network(&state);
-    let base_scenario_id = payload.base_scenario_id.clone();
     let batch_id = format!("batch-{}", now_ms());
     let batch_name = payload
         .name

@@ -187,7 +187,7 @@ Max **3 sous-agents parallèles** ; intégration parent après chaque vague.
 
 ## 7. Vague G — P11 Transitoire PDE (~6–10 sem) — GOULOT
 
-**Avancement juillet 2026 (~70–75 %)** : schéma volumes finis conservatif (capacitance C, conductance G chordée), bilan masse `flows_in`/`flows_out` par pas, UI TransientPlayer sur mono-pipe/chaîne série. Reste : réseaux branchés, WS streaming, TransientChart, CFL adaptatif, jauge linepack Cesium.
+**Avancement août 2026 (~95 %)** : FV trees+cycles+organes, WS streaming, `adaptive_dt`, CI nodale API, smoke TRR154 900 s / 24 h (stabilité, pas oracle). Reste : TransientChart, jauge linepack Cesium, oracle trajectoire acoustique.
 
 **Prérequis** : E (régulateurs stables), F1 recommandé  
 **Bloque** : couplage linepack P9, usage transitoire métier

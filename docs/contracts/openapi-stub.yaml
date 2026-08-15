@@ -84,3 +84,19 @@ paths:
         - `started`, `iteration`, `snapshot`, `converged`, `cancelled`, `error`, …
         - `continuation_step` : `{ run_id, seq, step, total_steps, scale }` — palier de continuation de charge
         - `transient_started` / `transient_step` / `transient_finished` — streaming transitoire
+  /api/nova/scenarios:
+    get:
+      summary: Liste des nominations `.scn` (bundlées + importées)
+  /api/nova/validate:
+    post:
+      summary: Valide une nomination NoVa (verdict compact HTTP)
+      description: |
+        Charge le `.scn` (`scenario_id`), fusionne les overrides de soutirage
+        (un `0` explicite coupe le sink) et renvoie un verdict Camille sans
+        cartes nodales P/Q. Alternative HTTP au WebSocket `start_simulation`.
+  /api/nova/capacity:
+    post:
+      summary: Étude capacité par sink (dichotomie)
+  /api/nova/compare:
+    post:
+      summary: Compare deux nominations NoVa (ΔP, ΔQ, verdicts)

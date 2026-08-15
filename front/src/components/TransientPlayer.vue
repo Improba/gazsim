@@ -39,15 +39,15 @@
         {{ currentStep.linepack_kg.toFixed(1) }} kg
       </div>
       <div class="col-6 col-sm-3">
-        <span class="text-grey-5">ΔLP</span>
+        <span class="text-grey-5">Variation</span>
         {{ currentStep.linepack_delta_kg.toFixed(2) }} kg
       </div>
       <div class="col-6 col-sm-3">
-        <span class="text-grey-5">Σ|Q_out|</span>
+        <span class="text-grey-5">Soutirage</span>
         {{ totalOutflow.toFixed(3) }} Nm³/s
       </div>
       <div v-if="maxImbalance != null" class="col-6 col-sm-3">
-        <span class="text-grey-5">max |Qin−Qout|</span>
+        <span class="text-grey-5">Déséquilibre</span>
         {{ maxImbalance.toFixed(4) }} Nm³/s
       </div>
       <div class="col-6 col-sm-3">
@@ -55,7 +55,7 @@
         {{ currentStep.residual.toExponential(2) }}
       </div>
       <div class="col-6 col-sm-3">
-        <span class="text-grey-5">Picard</span>
+        <span class="text-grey-5">Convergence</span>
         <span :class="currentStep.converged === false ? 'text-orange-4' : 'text-positive'">
           {{ currentStep.converged === false ? 'non convergé' : 'ok' }}
         </span>
@@ -87,7 +87,7 @@ const currentStep = computed(() => steps.value[stepIndex.value] ?? null);
 
 const timeLabel = computed(() => {
   const step = currentStep.value;
-  return step ? `${step.time_s.toFixed(0)} s` : '—';
+  return step ? `${step.time_s.toFixed(0)} s` : 'n/d';
 });
 
 const totalOutflow = computed(() => {

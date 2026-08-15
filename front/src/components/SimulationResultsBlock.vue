@@ -94,7 +94,7 @@
         :disable="simulateStore.loading"
         @click="showReport = true"
       >
-        <q-tooltip>Verdict, points déficitaires et capacité — export PDF ou JSON.</q-tooltip>
+        <q-tooltip>Verdict, points déficitaires et capacité (PDF ou JSON).</q-tooltip>
       </q-btn>
 
       <q-btn
@@ -110,6 +110,29 @@
       >
         <q-tooltip>{{ contingencyCtaTooltip }}</q-tooltip>
       </q-btn>
+
+      <q-btn
+        dense
+        outline
+        color="secondary"
+        icon="timeline"
+        label="Simuler un transitoire"
+        class="full-width q-mt-sm"
+        :to="{ name: 'transient' }"
+      >
+        <q-tooltip>Linepack et saut de soutirage à partir du régime actuel.</q-tooltip>
+      </q-btn>
+
+      <q-btn
+        v-if="showWorkspaceNextStep"
+        dense
+        outline
+        color="primary"
+        icon="analytics"
+        label="Ouvrir l'espace d'analyse"
+        class="full-width q-mt-sm"
+        :to="{ name: 'workspace' }"
+      />
     </div>
 
     <CertificationReportDialog v-model="showReport" />
@@ -386,6 +409,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import { useRoute } from 'vue-router';
 import CertificationReportDialog from 'src/components/CertificationReportDialog.vue';
 import SinkCapacityTable from 'src/components/SinkCapacityTable.vue';
 import SinkDiagnosticsList from 'src/components/SinkDiagnosticsList.vue';
@@ -428,9 +452,11 @@ const emit = defineEmits<{
 }>();
 
 const simulateStore = useSimulateStore();
+const route = useRoute();
 const showReport = ref(false);
 const scenarioDirty = computed(() => simulateStore.scenarioDirty);
 const scenarioStale = computed(() => simulateStore.scenarioStale);
+const showWorkspaceNextStep = computed(() => route.name === 'map');
 
 const {
   novaNominationId,

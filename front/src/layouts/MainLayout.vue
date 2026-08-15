@@ -28,7 +28,9 @@
           <q-btn flat label="Calage" :to="{ name: 'calibration' }" active-class="nav-active">
             <q-tooltip>Caler sur SCADA</q-tooltip>
           </q-btn>
-          <q-btn flat label="Transitoire" :to="{ name: 'transient' }" active-class="nav-active" />
+          <q-btn flat label="Transitoire" :to="{ name: 'transient' }" active-class="nav-active">
+            <q-tooltip>Linepack, saut de soutirage, horizon horaire</q-tooltip>
+          </q-btn>
 
           <q-separator vertical dark class="nav-sep" />
 
@@ -54,11 +56,11 @@
           flat
           round
           icon="refresh"
-          aria-label="Relancer la simulation"
-          :disable="simulateStore.loading || networkStore.nodes.length === 0 || !simulateStore.hasLastRun"
+          aria-label="Relancer la dernière validation"
+          :disable="refreshDisabled"
           @click="simulateStore.rerunLastSimulation()"
         >
-          <q-tooltip>Relancer la dernière simulation (mêmes paramètres)</q-tooltip>
+          <q-tooltip>{{ refreshTooltip }}</q-tooltip>
         </q-btn>
         <q-btn flat round icon="info" aria-label="À propos de GazFlow" @click="showInfo = true">
           <q-tooltip>À propos</q-tooltip>
@@ -138,9 +140,9 @@
           </p>
           <p class="text-subtitle2 text-grey-8 q-mb-xs q-mt-md">Périmètre et limites</p>
           <ul class="about-limits q-ma-none q-pl-md">
-            <li>Régime permanent et quasi-stationnaire horaire ; transitoire PDE partiel (réseaux ramifiés en repli quasi-stationnaire).</li>
-            <li>Hypothèse isotherme ; EOS Papay ou PR-78 selon composition ; modèle d'organes simplifié.</li>
-            <li>Calage indicatif sur mesures importées - ne remplace pas une validation terrain certifiée.</li>
+            <li>Régime permanent et quasi-stationnaire horaire. Transitoire dynamique (arbres, cycles, organes) ; repli pas à pas si le calcul dynamique ne tient pas.</li>
+            <li>Hypothèse isotherme. EOS Papay, PR-78 ou mélange selon H₂. Modèle d'organes simplifié.</li>
+            <li>Calage indicatif sur mesures importées : ne remplace pas une validation terrain certifiée.</li>
             <li>Décisions sécurité, contractuelles ou conduite en temps réel : vérification complémentaire obligatoire.</li>
           </ul>
         </q-card-section>
@@ -153,7 +155,8 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import { useNetworkStore } from 'src/stores/network';
 import { useNominationStore } from 'src/stores/nomination';
 import { useContingencyStore } from 'src/stores/contingency';
@@ -163,10 +166,25 @@ import GlobalStatusBar from 'src/components/GlobalStatusBar.vue';
 const showInfo = ref(false);
 const leftDrawer = ref(false);
 const appHeader = ref<{ $el?: HTMLElement } | HTMLElement | null>(null);
+const route = useRoute();
 const simulateStore = useSimulateStore();
 const networkStore = useNetworkStore();
 const nominationStore = useNominationStore();
 const contingencyStore = useContingencyStore();
+
+const isTransientRoute = computed(() => route.name === 'transient');
+const refreshDisabled = computed(
+  () =>
+    isTransientRoute.value
+    || simulateStore.loading
+    || networkStore.nodes.length === 0
+    || !simulateStore.hasLastRun,
+);
+const refreshTooltip = computed(() =>
+  isTransientRoute.value
+    ? 'Cette action relance la dernière validation (régime permanent), pas le transitoire.'
+    : 'Relancer la dernière validation (mêmes paramètres)',
+);
 
 const workflowLinks = [
   { name: 'dashboard', label: 'Tableau de bord', icon: 'dashboard' },

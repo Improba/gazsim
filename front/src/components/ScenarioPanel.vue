@@ -143,14 +143,19 @@
           @click="runTimeseries"
         />
         <q-btn
-          v-if="timeseriesStore.loading && timeseriesStore.useWebSocket"
+          v-if="timeseriesStore.loading"
           dense
           flat
           color="negative"
           icon="stop"
           label="Arrêter"
+          :disable="!timeseriesStore.useWebSocket"
           @click="timeseriesStore.cancelTimeseries()"
-        />
+        >
+          <q-tooltip v-if="!timeseriesStore.useWebSocket">
+            Activez le calcul en direct pour pouvoir arrêter.
+          </q-tooltip>
+        </q-btn>
       </div>
 
       <TimeseriesChart

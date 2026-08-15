@@ -1,6 +1,6 @@
 <template>
   <div>
-    <div class="text-h6 q-mb-sm">Simulation</div>
+    <div class="text-h6 q-mb-sm">Validation</div>
 
     <q-btn
       label="Charger le cas démo"
@@ -152,9 +152,9 @@
       <span class="text-caption text-grey-4">Mode de calcul</span>
       <q-icon name="help_outline" size="16px" class="q-ml-xs cursor-pointer text-grey-5">
         <q-tooltip max-width="280px">
-          <div class="q-mb-xs"><b>Libre</b> — {{ SIMULATION_MODE_HELP.free }}</div>
-          <div class="q-mb-xs"><b>Vérifier</b> — {{ SIMULATION_MODE_HELP.check }}</div>
-          <div><b>Optimiser</b> — {{ SIMULATION_MODE_HELP.optimize }}</div>
+          <div class="q-mb-xs"><b>Standard</b> : {{ SIMULATION_MODE_HELP.free }}</div>
+          <div class="q-mb-xs"><b>Vérifier</b> : {{ SIMULATION_MODE_HELP.check }}</div>
+          <div><b>Optimiser capacités</b> : {{ SIMULATION_MODE_HELP.optimize }}</div>
         </q-tooltip>
       </q-icon>
     </div>

@@ -9,10 +9,35 @@
         <div class="text-h6">Analyse de contingence N-1</div>
         <div class="text-caption text-grey-5">
           Analyse N-1 : retrait successif de chaque source, vanne ou compresseur. Cas verts = régime
-          convergé sans violation de P minimale aux points de livraison et soutirages. Cas rouges =
-          non-convergence ou pression sous le seuil contractuel / technique.
+          convergé sans violation de P minimale aux points de livraison. Cas rouges = non-convergence
+          ou pression sous le seuil contractuel / technique.
         </div>
       </q-card-section>
+
+      <q-banner
+        v-if="networkStore.nodes.length === 0 && !networkStore.loading"
+        dense
+        rounded
+        class="bg-orange-10 text-orange-2 q-mx-md q-mb-sm"
+      >
+        Aucun réseau chargé. Importez un jeu ou lancez la démo depuis le tableau de bord.
+        <template #action>
+          <q-btn flat color="white" label="Importer" :to="{ name: 'import' }" />
+          <q-btn flat color="white" label="Tableau de bord" :to="{ name: 'dashboard' }" />
+        </template>
+      </q-banner>
+
+      <q-banner
+        v-else-if="simulateStore.scenarioStale && networkStore.nodes.length > 0"
+        dense
+        rounded
+        class="bg-amber-10 text-amber-2 q-mx-md q-mb-sm"
+      >
+        Validez d'abord la tenue pression avant l'analyse N-1.
+        <template #action>
+          <q-btn flat color="white" label="Valider" :to="{ name: 'map' }" />
+        </template>
+      </q-banner>
 
       <q-card-section class="row q-col-gutter-md items-end">
         <div class="col-12 col-sm-4">
@@ -30,10 +55,12 @@
         <div class="col-12 col-sm-3">
           <q-toggle
             v-model="contingencyStore.useWebSocket"
-            label="Calcul en direct"
+            label="Suivi en direct"
             color="primary"
             dark
-          />
+          >
+            <q-tooltip>Affiche la progression des cas et permet d'arrêter l'analyse.</q-tooltip>
+          </q-toggle>
         </div>
         <div class="col-12 col-sm-auto">
           <q-btn
@@ -62,7 +89,11 @@
             label="Arrêter"
             :disable="!contingencyStore.loading || !contingencyStore.useWebSocket"
             @click="contingencyStore.cancelContingency()"
-          />
+          >
+            <q-tooltip v-if="!contingencyStore.useWebSocket">
+              Activez le suivi en direct pour pouvoir arrêter une analyse en cours.
+            </q-tooltip>
+          </q-btn>
         </div>
       </q-card-section>
 
@@ -115,6 +146,15 @@
               @click="exportReport('csv')"
             />
           </div>
+          <div class="col-auto">
+            <q-btn
+              dense
+              color="secondary"
+              icon="timeline"
+              label="Transitoire"
+              :to="{ name: 'transient' }"
+            />
+          </div>
         </div>
 
         <q-table
@@ -160,7 +200,15 @@
       </q-card-section>
 
       <q-card-section v-else-if="!loading && !report" class="text-caption text-grey-5">
-        Chargez un réseau (carte ou import) puis lancez une analyse N-1.
+        <template v-if="networkStore.nodes.length === 0">
+          Chargez un réseau puis lancez l'analyse N-1.
+        </template>
+        <template v-else-if="simulateStore.scenarioStale">
+          Validez la nomination (bouton Valider) puis relancez l'analyse ici.
+        </template>
+        <template v-else>
+          Choisissez le périmètre puis lancez l'analyse.
+        </template>
       </q-card-section>
     </q-card>
   </q-page>

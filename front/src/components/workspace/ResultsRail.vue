@@ -6,11 +6,8 @@
       </template>
       <div class="text-weight-medium">Pas encore de résultats</div>
       <div class="text-caption text-blue-grey-4">
-        Lancez une validation (nomination + Valider) pour peupler le verdict, les causes et les exports.
+        Validez une nomination ci-dessus pour peupler le verdict, les causes et les exports.
       </div>
-      <template #action>
-        <q-btn flat dense color="white" label="Carte" :to="{ name: 'map' }" />
-      </template>
     </q-banner>
   </div>
 

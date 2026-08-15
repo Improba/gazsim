@@ -5,13 +5,9 @@
       <q-card-section>
         <div class="text-h6">Simulation transitoire</div>
         <div class="text-caption text-grey-5">
-          Quasi-stationnaire : chaque pas résout un régime permanent et suit le linepack agrégé.
-          Mode PDE : volumes finis 1D (arbres, cycles via arbre couvrant, régulateurs/compresseurs
-          algébriques). Streaming WebSocket et dt adaptatif optionnels.
-        </div>
-        <div v-if="networkStore.activeNetwork" class="text-caption text-grey-4 q-mt-xs">
-          Réseau actif : {{ networkStore.activeNetwork }}
-          ({{ networkStore.nodes.length }} nœuds, {{ networkStore.pipes.length }} conduites)
+          Évolution du linepack et des pressions sur un horizon (saut de soutirage, profil horaire).
+          <b>Pas à pas</b> : un régime permanent à chaque pas, adapté au suivi horaire.
+          <b>Dynamique</b> : ondes et stockage dans les conduites ; un pas trop grand peut diverger.
         </div>
       </q-card-section>
 
@@ -21,10 +17,10 @@
         rounded
         class="bg-orange-10 text-orange-2 q-mx-md q-mb-sm"
       >
-        Aucun réseau chargé. Importez un réseau ou sélectionnez GasLib-11 sur la carte.
+        Aucun réseau chargé. Importez un jeu ou lancez la démo depuis le tableau de bord.
         <template #action>
           <q-btn flat color="white" label="Importer" :to="{ name: 'import' }" />
-          <q-btn flat color="white" label="Carte" :to="{ name: 'map' }" />
+          <q-btn flat color="white" label="Tableau de bord" :to="{ name: 'dashboard' }" />
         </template>
       </q-banner>
 
@@ -40,6 +36,28 @@
         <div v-for="(msg, idx) in networkStore.gas.warnings" :key="idx">{{ msg }}</div>
       </q-banner>
 
+      <q-banner
+        v-if="pdeLargeDtWarning"
+        dense
+        rounded
+        class="bg-orange-10 text-orange-2 q-mx-md q-mb-sm"
+      >
+        Mode dynamique avec un pas fixe trop grand : risque de divergence. Activez le pas de temps
+        automatique ou réduisez le pas (60 s recommandé).
+      </q-banner>
+
+      <q-banner
+        v-if="networkStore.nodes.length > 0 && !hasLastSolvePressures"
+        dense
+        rounded
+        class="bg-blue-grey-10 text-blue-grey-2 q-mx-md q-mb-sm"
+      >
+        Aucune validation récente : le transitoire partira des pressions nominales du réseau.
+        <template #action>
+          <q-btn flat color="white" label="Valider" :to="{ name: 'map' }" />
+        </template>
+      </q-banner>
+
       <q-card-section class="row q-col-gutter-md items-end">
         <div class="col-12 col-sm-4">
           <q-btn-toggle
@@ -52,38 +70,30 @@
             :options="modeOptions"
             class="full-width"
           />
+          <div class="text-caption text-grey-5 q-mt-xs">{{ modeHelp }}</div>
         </div>
         <div class="col-6 col-sm-2">
           <q-input
             v-model.number="durationS"
-            label="Durée (s)"
+            label="Horizon (s)"
             type="number"
             dense
             outlined
             dark
             min="1"
-          />
+          >
+            <q-tooltip>3600 s = 1 heure</q-tooltip>
+          </q-input>
         </div>
         <div class="col-6 col-sm-2">
           <q-input
             v-model.number="dtS"
-            label="Pas (s)"
+            label="Pas de calcul (s)"
             type="number"
             dense
             outlined
             dark
             min="1"
-          />
-        </div>
-        <div v-if="mode === 'pde'" class="col-6 col-sm-2">
-          <q-input
-            v-model.number="nCellsPerPipe"
-            label="Cellules / conduite"
-            type="number"
-            dense
-            outlined
-            dark
-            min="4"
           />
         </div>
         <div class="col-12 col-sm-auto">
@@ -97,56 +107,67 @@
           />
         </div>
         <div class="col-12 col-sm-auto">
-          <q-checkbox
-            v-model="useWebSocket"
-            dense
-            dark
-            label="WebSocket (streaming)"
-          />
-        </div>
-        <div v-if="mode === 'pde'" class="col-12 col-sm-auto">
-          <q-checkbox
-            v-model="adaptiveDt"
-            dense
-            dark
-            label="dt adaptatif"
-          />
-        </div>
-        <div v-if="hasLastSolvePressures" class="col-12 col-sm-auto">
-          <q-checkbox
-            v-model="useSteadyPressuresIc"
-            dense
-            dark
-            label="CI depuis dernière simu steady"
-          />
-        </div>
-        <div v-if="loading && useWebSocket" class="col-12 col-sm-auto">
           <q-btn
-            flat
-            dense
             color="negative"
-            icon="cancel"
-            label="Annuler"
+            icon="stop"
+            label="Arrêter"
+            :disable="!loading || !useWebSocket"
             @click="cancelRun"
-          />
+          >
+            <q-tooltip v-if="!useWebSocket">
+              Activez le suivi en direct pour pouvoir arrêter un calcul en cours.
+            </q-tooltip>
+          </q-btn>
         </div>
       </q-card-section>
 
       <q-card-section class="q-pt-none">
         <div class="row q-col-gutter-md items-center">
+          <div class="col-12 col-sm-auto">
+            <q-checkbox
+              v-model="useWebSocket"
+              dense
+              dark
+              label="Suivi en direct"
+            >
+              <q-tooltip>Affiche les pas au fur et à mesure et permet d'arrêter le calcul.</q-tooltip>
+            </q-checkbox>
+          </div>
+          <div v-if="mode === 'pde'" class="col-12 col-sm-auto">
+            <q-checkbox
+              v-model="adaptiveDt"
+              dense
+              dark
+              label="Pas de temps automatique"
+            >
+              <q-tooltip>Réduit le pas si le calcul dynamique peine à converger.</q-tooltip>
+            </q-checkbox>
+          </div>
+          <div v-if="hasLastSolvePressures" class="col-12 col-sm-auto">
+            <q-checkbox
+              v-model="useSteadyPressuresIc"
+              dense
+              dark
+              label="Partir du régime actuel"
+            >
+              <q-tooltip>Reprend les pressions de la dernière validation comme condition initiale.</q-tooltip>
+            </q-checkbox>
+          </div>
+        </div>
+        <div class="row q-col-gutter-md items-center q-mt-sm">
           <div class="col-auto">
             <q-checkbox
               v-model="demandStepEnabled"
               dense
               dark
-              label="Échelon de demande à t=0"
+              label="Saut de soutirage au démarrage"
             />
           </div>
           <div v-if="demandStepEnabled" class="col-6 col-sm-3">
             <q-select
               v-model="demandStepSink"
               :options="sinkNodeOptions"
-              label="Sink"
+              label="Point de livraison"
               dense
               outlined
               dark
@@ -164,9 +185,32 @@
               dark
               min="1.01"
               step="0.1"
-            />
+            >
+              <q-tooltip>Multiplie le soutirage du point choisi dès t = 0 (ex. 2 = doublement).</q-tooltip>
+            </q-input>
           </div>
         </div>
+        <q-expansion-item
+          v-if="mode === 'pde'"
+          dense
+          dark
+          icon="tune"
+          label="Réglages fins"
+          class="bg-grey-10 rounded-borders q-mt-sm"
+        >
+          <div class="q-pa-sm">
+            <q-input
+              v-model.number="nCellsPerPipe"
+              label="Maillage (cellules / conduite)"
+              type="number"
+              dense
+              outlined
+              dark
+              min="4"
+              hint="Plus de cellules = plus précis, plus lent."
+            />
+          </div>
+        </q-expansion-item>
       </q-card-section>
 
       <q-card-section v-if="result">
@@ -179,7 +223,7 @@
           <template #avatar>
             <q-icon name="info" />
           </template>
-          Mode PDE demandé mais le solveur a utilisé un repli : {{ result.limitation }}
+          Mode dynamique demandé, repli sur un calcul pas à pas : {{ result.limitation }}
         </q-banner>
 
         <q-banner
@@ -191,13 +235,17 @@
           <template #avatar>
             <q-icon name="warning" />
           </template>
-          Au moins un pas n'a pas convergé (Picard / bilan). Les pressions de ces pas sont
-          dégradées — voir la colonne « Conv. ».
+          Au moins un pas n'a pas convergé. Les pressions de ces pas sont à prendre avec précaution
+          (colonne Convergence).
         </q-banner>
 
         <div class="text-caption text-grey-4 q-mb-sm">
-          {{ result.steps.length }} pas — {{ result.total_iterations }} itérations —
+          {{ result.steps.length }} pas, {{ result.total_iterations }} itérations.
           {{ result.limitation }}
+        </div>
+
+        <div class="text-caption text-grey-5 q-mb-sm">
+          Le lecteur met à jour les pressions affichées sur la carte.
         </div>
 
         <TransientPlayer
@@ -205,6 +253,23 @@
           :result="result"
           @step-change="onStepChange"
         />
+
+        <div class="row q-gutter-sm q-mb-md">
+          <q-btn
+            outline
+            color="primary"
+            icon="map"
+            label="Voir le pas courant sur la carte"
+            :to="{ name: 'map' }"
+          />
+          <q-btn
+            outline
+            color="secondary"
+            icon="shield"
+            label="Enchaîner une analyse N-1"
+            :to="{ name: 'contingency' }"
+          />
+        </div>
 
         <q-expansion-item
           dense
@@ -257,9 +322,9 @@ const demandStepEnabled = ref(false);
 const demandStepSink = ref<string | null>(null);
 const demandStepFactor = ref(2);
 const loading = ref(false);
-const useWebSocket = ref(false);
+const useWebSocket = ref(true);
 const adaptiveDt = ref(false);
-const useSteadyPressuresIc = ref(false);
+const useSteadyPressuresIc = ref(true);
 const result = ref<TransientResultDto | null>(null);
 const requestedMode = ref<TransientMode>('quasi_steady');
 const currentRunId = ref<string | null>(null);
@@ -269,9 +334,15 @@ let wsResolve: ((result: TransientResultDto) => void) | null = null;
 let wsReject: ((err: Error) => void) | null = null;
 
 const modeOptions = [
-  { label: 'Quasi-stationnaire', value: 'quasi_steady' as const },
-  { label: 'PDE', value: 'pde' as const },
+  { label: 'Pas à pas', value: 'quasi_steady' as const },
+  { label: 'Dynamique', value: 'pde' as const },
 ];
+
+const modeHelp = computed(() =>
+  mode.value === 'pde'
+    ? 'Dynamique : ondes et linepack dans les conduites. Un pas fixe ≥ 120 s est déconseillé.'
+    : 'Pas à pas : un régime permanent à chaque pas, adapté au suivi horaire du linepack.',
+);
 
 const sinkNodeOptions = computed(() => {
   const pipeTos = new Set(networkStore.pipes.map((p) => p.to));
@@ -294,6 +365,14 @@ watch(
   { immediate: true },
 );
 
+watch(mode, (next) => {
+  if (next !== 'pde') return;
+  adaptiveDt.value = true;
+  if (Number(dtS.value) >= 120) {
+    dtS.value = 60;
+  }
+});
+
 const showPdeFallbackBanner = computed(() => {
   if (!result.value || requestedMode.value !== 'pde') return false;
   return result.value.limitation.toLowerCase().includes('fallback');
@@ -308,6 +387,10 @@ const hasLastSolvePressures = computed(() => {
   if (fromResult && Object.keys(fromResult).length > 0) return true;
   return Object.keys(simulateStore.livePressures).length > 0;
 });
+
+const pdeLargeDtWarning = computed(
+  () => mode.value === 'pde' && !adaptiveDt.value && Number(dtS.value) >= 120,
+);
 
 const tableRows = computed(() =>
   (result.value?.steps ?? []).map((step, idx) => ({ ...step, _idx: idx })),
@@ -341,27 +424,27 @@ const columns = computed(() => {
     { name: 'time_s', label: 't (s)', field: 'time_s', align: 'left' as const },
     {
       name: 'converged',
-      label: 'Conv.',
+      label: 'Convergence',
       field: (r: TransientStepDto) => (r.converged === false ? 'non' : 'oui'),
       align: 'center' as const,
     },
     {
       name: 'q_out',
-      label: 'max |Q_out| (Nm³/s)',
+      label: 'Soutirage max (Nm³/s)',
       field: (r: TransientStepDto) => maxOutflow(r).toFixed(3),
     },
     { name: 'linepack_kg', label: 'Linepack (kg)', field: (r: { linepack_kg: number }) => r.linepack_kg.toFixed(1) },
-    { name: 'linepack_delta_kg', label: 'ΔLP (kg)', field: (r: { linepack_delta_kg: number }) => r.linepack_delta_kg.toFixed(2) },
+    { name: 'linepack_delta_kg', label: 'Δ linepack (kg)', field: (r: { linepack_delta_kg: number }) => r.linepack_delta_kg.toFixed(2) },
     { name: 'residual', label: 'Résidu', field: (r: { residual: number }) => r.residual.toExponential(2) },
     { name: 'iterations', label: 'Iter.', field: 'iterations', align: 'right' as const },
   ];
   if (hasImbalance) {
     cols.splice(3, 0, {
       name: 'imbalance',
-      label: 'max |Qin−Qout|',
+      label: 'Déséquilibre conduite',
       field: (r: TransientStepDto) => {
         const imb = maxImbalance(r);
-        return imb != null ? imb.toFixed(4) : '—';
+        return imb != null ? imb.toFixed(4) : 'n/d';
       },
     });
   }

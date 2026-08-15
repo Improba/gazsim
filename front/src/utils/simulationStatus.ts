@@ -13,9 +13,9 @@ export function simulationStatusLabel(status: SimulationStatus): string {
 }
 
 export const SIMULATION_MODE_HELP = {
-  free: 'Calcul libre : les soutirages du scénario sont appliqués sans contrainte de capacité.',
+  free: 'Les soutirages du scénario sont appliqués sans contrainte de capacité.',
   check:
-    'Vérification : respect des bornes min/max de débit des nœuds (mode capacité).',
+    'Respect des bornes min/max de débit des nœuds (mode capacité).',
   optimize:
-    'Optimisation : ajuste les soutirages pour respecter les bornes de débit des nœuds.',
+    'Ajuste les soutirages pour respecter les bornes de débit des nœuds.',
 } as const;

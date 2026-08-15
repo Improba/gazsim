@@ -8,10 +8,10 @@
       <div class="col-12 col-sm-auto">
         <span class="text-weight-medium">Réseau :</span>
         {{ networkLabel }}
-        <span v-if="topologyLine" class="text-grey-5"> — {{ topologyLine }}</span>
+        <span v-if="topologyLine" class="text-grey-5"> ({{ topologyLine }})</span>
       </div>
       <div v-if="nominationScenarioId" class="col-12 col-sm-auto">
-        <span class="text-weight-medium">Nomination N-1 :</span>
+        <span class="text-weight-medium">Nomination :</span>
         {{ nominationScenarioId }}
       </div>
       <div v-if="scenarioLine" class="col-12 col-sm-auto">

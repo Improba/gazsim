@@ -208,14 +208,30 @@
     </section>
 
     <section v-if="showWorkspaceCta" class="q-mb-md">
-      <q-btn
-        color="primary"
-        unelevated
-        size="lg"
-        icon="analytics"
-        label="Ouvrir l'espace d'analyse"
-        @click="router.push({ name: 'workspace' })"
-      />
+      <div class="text-subtitle1 text-white q-mb-sm">Suite de l'étude</div>
+      <div class="row q-gutter-sm">
+        <q-btn
+          color="primary"
+          unelevated
+          icon="analytics"
+          label="Espace d'analyse"
+          @click="router.push({ name: 'workspace' })"
+        />
+        <q-btn
+          color="secondary"
+          outline
+          icon="shield"
+          label="Analyser N-1"
+          @click="router.push({ name: 'contingency' })"
+        />
+        <q-btn
+          color="secondary"
+          outline
+          icon="timeline"
+          label="Transitoire"
+          @click="router.push({ name: 'transient' })"
+        />
+      </div>
     </section>
   </q-page>
 </template>

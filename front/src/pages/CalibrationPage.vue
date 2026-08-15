@@ -6,10 +6,23 @@
         <div class="text-h6">Calage SCADA</div>
         <div class="text-caption text-grey-5">
           Importez des mesures de terrain (pressions, débits) et ajustez les rugosités du réseau
-          actif pour rapprocher la simulation des observations. Résultat indicatif — ne remplace
+          actif pour rapprocher la simulation des observations. Résultat indicatif : ne remplace
           pas une validation terrain certifiée.
         </div>
       </q-card-section>
+
+      <q-banner
+        v-if="networkStore.nodes.length === 0 && !networkStore.loading"
+        dense
+        rounded
+        class="bg-orange-10 text-orange-2 q-mx-md q-mb-sm"
+      >
+        Aucun réseau chargé. Importez un jeu ou lancez la démo depuis le tableau de bord.
+        <template #action>
+          <q-btn flat color="white" label="Importer" :to="{ name: 'import' }" />
+          <q-btn flat color="white" label="Tableau de bord" :to="{ name: 'dashboard' }" />
+        </template>
+      </q-banner>
 
       <q-card-section class="row q-col-gutter-md">
         <div class="col-12 col-md-8">
@@ -71,7 +84,9 @@
             :loading="loading"
             :disable="!canRun"
             @click="runCalibration"
-          />
+          >
+            <q-tooltip v-if="!canRun">{{ calibrationDisabledTooltip }}</q-tooltip>
+          </q-btn>
         </div>
       </q-card-section>
 
@@ -148,11 +163,21 @@
             </div>
           </div>
         </div>
+
+        <div class="row q-gutter-sm q-mt-md">
+          <q-btn
+            outline
+            color="primary"
+            icon="verified"
+            label="Re-valider la tenue pression"
+            :to="{ name: 'map' }"
+          />
+        </div>
       </q-card-section>
 
       <q-card-section v-else-if="!loading" class="text-caption text-grey-5">
         <template v-if="networkStore.nodes.length === 0">
-          Chargez un réseau (carte ou import) avant de lancer le calage.
+          Chargez un réseau (import ou tableau de bord) avant de lancer le calage.
         </template>
         <template v-else>
           Saisissez ou importez des mesures SCADA, choisissez une stratégie puis lancez le calage.
@@ -207,6 +232,16 @@ const strategyOptions = [
 const canRun = computed(
   () => measurementsCsv.value.trim().length > 0 && networkStore.nodes.length > 0,
 );
+
+const calibrationDisabledTooltip = computed(() => {
+  if (networkStore.nodes.length === 0) {
+    return 'Chargez un réseau avant de lancer le calage.';
+  }
+  if (measurementsCsv.value.trim().length === 0) {
+    return 'Saisissez ou importez des mesures SCADA.';
+  }
+  return '';
+});
 
 const paramColumns = [
   { name: 'id', label: 'Paramètre', field: 'id', align: 'left' as const, sortable: true },

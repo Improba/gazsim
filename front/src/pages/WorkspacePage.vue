@@ -71,15 +71,7 @@
       <template #avatar>
         <q-icon name="info" color="blue-grey-4" />
       </template>
-      Aucun résultat — sélectionnez une nomination ci-dessous puis validez la tenue pression.
-      <template #action>
-        <q-btn
-          flat
-          color="white"
-          label="Ouvrir la carte"
-          @click="router.push({ name: 'map' })"
-        />
-      </template>
+      Aucun résultat : sélectionnez une nomination ci-dessous puis validez la tenue pression.
     </q-banner>
 
     <div v-if="hasNetwork" class="workspace-page__launch q-mb-md">

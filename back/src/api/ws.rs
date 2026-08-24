@@ -930,13 +930,55 @@ fn run_solver_stream(ctx: SolverStreamContext) {
         return;
     }
 
-    // Diagnostics NoVa : évalue le résultat contre les bornes contractuelles scénario.
-    // Renvoie None si aucun scénario n'est fourni (run hors-NoVa, comportement inchangé).
-    let compute_nova = |result: &SolverResult| -> Option<solver::NovaDiagnostics> {
-        scenario
-            .as_ref()
-            .map(|sc| solver::compute_nova_diagnostics(&network_prepared, sc, result))
-    };
+    fn pack_nova_after_solve(
+        network: &crate::graph::GasNetwork,
+        scenario: Option<&crate::gaslib::ScenarioDemands>,
+        demands: &HashMap<String, f64>,
+        gas: solver::GasComposition,
+        result: &SolverResult,
+        tol_m3s: f64,
+    ) -> (
+        Vec<solver::ScenarioPressureSlip>,
+        Vec<solver::ScenarioPressureMargin>,
+        Vec<solver::BoundaryPressureSupplyReport>,
+        Vec<solver::SinkDiagnostic>,
+        Option<solver::NovaVerdict>,
+        SolverResult,
+    ) {
+        match scenario {
+            Some(sc) => {
+                let newton_diag = solver::compute_nova_diagnostics(network, sc, result);
+                let converged = result.residual <= tol_m3s && !result.pressures.is_empty();
+                let (v, working) = super::nova_finalize::finalize_nova_verdict(
+                    network,
+                    Some(sc),
+                    demands,
+                    gas,
+                    &newton_diag,
+                    converged,
+                    tol_m3s,
+                    result,
+                );
+                let d = solver::compute_nova_diagnostics(network, sc, &working);
+                (
+                    d.pressure_slips,
+                    d.pressure_margins,
+                    d.boundary_supply,
+                    d.sink_diagnostics,
+                    Some(v),
+                    working,
+                )
+            }
+            None => (
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                None,
+                result.clone(),
+            ),
+        }
+    }
 
     let outcome = match (&capacity_bounds, &mode) {
         (Some(api_bounds), Some(SimulationMode::Optimize)) => {
@@ -1020,48 +1062,49 @@ fn run_solver_stream(ctx: SolverStreamContext) {
 
     match outcome {
         SolveOutcome::Normal(Ok(final_result)) => {
-            super::store_last_simulation(&state, demands.clone(), final_result.clone());
+            let tol_m3s = options.tolerance;
+            let (pressure_slips, pressure_margins, boundary_supply, sink_diagnostics, nova_verdict, working) =
+                pack_nova_after_solve(
+                    &network_prepared,
+                    scenario.as_ref(),
+                    &demands,
+                    steady_config.gas_composition,
+                    &final_result,
+                    tol_m3s,
+                );
+            super::store_last_simulation(&state, demands.clone(), working.clone());
             super::export::store_export_record(
                 &state,
                 super::export::new_export_record(
                     run_id.clone(),
-                    network_id,
+                    network_id.clone(),
                     &network_prepared,
                     demands.clone(),
-                    final_result.clone(),
+                    working.clone(),
                     started.elapsed().as_millis() as u64,
                 ),
             );
-            let tol_m3s = options.tolerance;
-            let (pressure_slips, pressure_margins, boundary_supply, sink_diagnostics, nova_verdict) =
-                match compute_nova(&final_result) {
-                    Some(d) => {
-                        let converged = final_result.residual <= tol_m3s;
-                        let v = super::nova_finalize::finalize_nova_verdict(
-                            &network_prepared,
-                            scenario.as_ref(),
-                            &demands,
-                            steady_config.gas_composition,
-                            &d,
-                            converged,
-                            tol_m3s,
-                            &final_result,
-                        );
-                        (
-                            d.pressure_slips,
-                            d.pressure_margins,
-                            d.boundary_supply,
-                            d.sink_diagnostics,
-                            Some(v),
-                        )
-                    }
-                    None => (Vec::new(), Vec::new(), Vec::new(), Vec::new(), None),
-                };
+            super::nova_runs::store_nova_run(
+                &state,
+                super::nova_runs::NovaRunRecord::from_solve(
+                    run_id.clone(),
+                    network_id.clone(),
+                    scenario.as_ref().and_then(|sc| sc.scenario_id.clone()),
+                    "validate",
+                    demands.clone(),
+                    working.clone(),
+                    pressure_slips.clone(),
+                    pressure_margins.clone(),
+                    boundary_supply.clone(),
+                    sink_diagnostics.clone(),
+                    nova_verdict.clone(),
+                ),
+            );
             let s = seq.fetch_add(1, Ordering::Relaxed) + 1;
             let _ = tx.blocking_send(ServerMessage::Converged {
                 run_id,
                 seq: s,
-                result: final_result,
+                result: working,
                 total_ms: started.elapsed().as_millis() as u64,
                 capacity_violations: Vec::new(),
                 adjusted_demands: None,
@@ -1080,54 +1123,55 @@ fn run_solver_stream(ctx: SolverStreamContext) {
             result: Ok(final_result),
             bounds,
         } => {
-            super::store_last_simulation(&state, demands.clone(), final_result.clone());
             let violations = solver::capacity::check_capacity_violations(
                 &network_prepared,
                 &final_result,
                 &demands,
                 &bounds,
             );
+            let tol_m3s = options.tolerance;
+            let (pressure_slips, pressure_margins, boundary_supply, sink_diagnostics, nova_verdict, working) =
+                pack_nova_after_solve(
+                    &network_prepared,
+                    scenario.as_ref(),
+                    &demands,
+                    steady_config.gas_composition,
+                    &final_result,
+                    tol_m3s,
+                );
+            super::store_last_simulation(&state, demands.clone(), working.clone());
             super::export::store_export_record(
                 &state,
                 super::export::new_export_record(
                     run_id.clone(),
-                    network_id,
+                    network_id.clone(),
                     &network_prepared,
                     demands.clone(),
-                    final_result.clone(),
+                    working.clone(),
                     started.elapsed().as_millis() as u64,
                 ),
             );
-            let tol_m3s = options.tolerance;
-            let (pressure_slips, pressure_margins, boundary_supply, sink_diagnostics, nova_verdict) =
-                match compute_nova(&final_result) {
-                    Some(d) => {
-                        let converged = final_result.residual <= tol_m3s;
-                        let v = super::nova_finalize::finalize_nova_verdict(
-                            &network_prepared,
-                            scenario.as_ref(),
-                            &demands,
-                            steady_config.gas_composition,
-                            &d,
-                            converged,
-                            tol_m3s,
-                            &final_result,
-                        );
-                        (
-                            d.pressure_slips,
-                            d.pressure_margins,
-                            d.boundary_supply,
-                            d.sink_diagnostics,
-                            Some(v),
-                        )
-                    }
-                    None => (Vec::new(), Vec::new(), Vec::new(), Vec::new(), None),
-                };
+            super::nova_runs::store_nova_run(
+                &state,
+                super::nova_runs::NovaRunRecord::from_solve(
+                    run_id.clone(),
+                    network_id.clone(),
+                    scenario.as_ref().and_then(|sc| sc.scenario_id.clone()),
+                    "validate",
+                    demands.clone(),
+                    working.clone(),
+                    pressure_slips.clone(),
+                    pressure_margins.clone(),
+                    boundary_supply.clone(),
+                    sink_diagnostics.clone(),
+                    nova_verdict.clone(),
+                ),
+            );
             let s = seq.fetch_add(1, Ordering::Relaxed) + 1;
             let _ = tx.blocking_send(ServerMessage::Converged {
                 run_id,
                 seq: s,
-                result: final_result,
+                result: working,
                 total_ms: started.elapsed().as_millis() as u64,
                 capacity_violations: violations,
                 adjusted_demands: None,
@@ -1150,7 +1194,6 @@ fn run_solver_stream(ctx: SolverStreamContext) {
                 constrained.iterations,
                 constrained.residual,
             );
-            super::store_last_simulation(&state, demands.clone(), ws_result.clone());
             let ws_violations = constrained.capacity_violations.clone();
             let ws_adjusted = constrained.adjusted_demands.clone();
             let ws_active = constrained.active_bounds.clone();
@@ -1158,46 +1201,48 @@ fn run_solver_stream(ctx: SolverStreamContext) {
             let ws_outer = constrained.outer_iterations;
             let ws_diag = constrained.infeasibility_diagnostic.clone();
             let tol_m3s = options.tolerance;
-            let (pressure_slips, pressure_margins, boundary_supply, sink_diagnostics, nova_verdict) =
-                match compute_nova(&ws_result) {
-                    Some(d) => {
-                        let converged = ws_result.residual <= tol_m3s;
-                        let v = super::nova_finalize::finalize_nova_verdict(
-                            &network_prepared,
-                            scenario.as_ref(),
-                            &demands,
-                            steady_config.gas_composition,
-                            &d,
-                            converged,
-                            tol_m3s,
-                            &ws_result,
-                        );
-                        (
-                            d.pressure_slips,
-                            d.pressure_margins,
-                            d.boundary_supply,
-                            d.sink_diagnostics,
-                            Some(v),
-                        )
-                    }
-                    None => (Vec::new(), Vec::new(), Vec::new(), Vec::new(), None),
-                };
+            let (pressure_slips, pressure_margins, boundary_supply, sink_diagnostics, nova_verdict, working) =
+                pack_nova_after_solve(
+                    &network_prepared,
+                    scenario.as_ref(),
+                    &demands,
+                    steady_config.gas_composition,
+                    &ws_result,
+                    tol_m3s,
+                );
+            super::store_last_simulation(&state, demands.clone(), working.clone());
             super::export::store_export_record(
                 &state,
                 super::export::new_constrained_export_record(
                     run_id.clone(),
-                    network_id,
+                    network_id.clone(),
                     &network,
                     demands.clone(),
                     constrained,
                     total_ms,
                 ),
             );
+            super::nova_runs::store_nova_run(
+                &state,
+                super::nova_runs::NovaRunRecord::from_solve(
+                    run_id.clone(),
+                    network_id.clone(),
+                    scenario.as_ref().and_then(|sc| sc.scenario_id.clone()),
+                    "validate",
+                    demands.clone(),
+                    working.clone(),
+                    pressure_slips.clone(),
+                    pressure_margins.clone(),
+                    boundary_supply.clone(),
+                    sink_diagnostics.clone(),
+                    nova_verdict.clone(),
+                ),
+            );
             let s = seq.fetch_add(1, Ordering::Relaxed) + 1;
             let _ = tx.blocking_send(ServerMessage::Converged {
                 run_id,
                 seq: s,
-                result: ws_result,
+                result: working,
                 total_ms,
                 capacity_violations: ws_violations,
                 adjusted_demands: Some(ws_adjusted),
@@ -1230,11 +1275,87 @@ fn run_solver_stream(ctx: SolverStreamContext) {
                     reason: reason.to_string(),
                 });
             } else if err.to_string().contains("did not converge") {
-                let _ = tx.blocking_send(ServerMessage::Cancelled {
-                    run_id,
-                    seq: s,
-                    reason: "diverged".to_string(),
-                });
+                let empty = SolverResult::from_core(
+                    HashMap::new(),
+                    HashMap::new(),
+                    0,
+                    f64::INFINITY,
+                );
+                let (
+                    pressure_slips,
+                    pressure_margins,
+                    boundary_supply,
+                    sink_diagnostics,
+                    nova_verdict,
+                    working,
+                ) = pack_nova_after_solve(
+                    &network_prepared,
+                    scenario.as_ref(),
+                    &demands,
+                    steady_config.gas_composition,
+                    &empty,
+                    options.tolerance,
+                );
+                let ipopt_established = nova_verdict
+                    .as_ref()
+                    .map(|v| {
+                        v.solver_signature == solver::NovaSolverSignature::IpoptEscalation
+                            && (v.feasible || v.converged)
+                    })
+                    .unwrap_or(false);
+                if ipopt_established {
+                    super::store_last_simulation(&state, demands.clone(), working.clone());
+                    super::export::store_export_record(
+                        &state,
+                        super::export::new_export_record(
+                            run_id.clone(),
+                            network_id.clone(),
+                            &network_prepared,
+                            demands.clone(),
+                            working.clone(),
+                            started.elapsed().as_millis() as u64,
+                        ),
+                    );
+                    super::nova_runs::store_nova_run(
+                        &state,
+                        super::nova_runs::NovaRunRecord::from_solve(
+                            run_id.clone(),
+                            network_id.clone(),
+                            scenario.as_ref().and_then(|sc| sc.scenario_id.clone()),
+                            "validate",
+                            demands.clone(),
+                            working.clone(),
+                            pressure_slips.clone(),
+                            pressure_margins.clone(),
+                            boundary_supply.clone(),
+                            sink_diagnostics.clone(),
+                            nova_verdict.clone(),
+                        ),
+                    );
+                    let _ = tx.blocking_send(ServerMessage::Converged {
+                        run_id,
+                        seq: s,
+                        result: working,
+                        total_ms: started.elapsed().as_millis() as u64,
+                        capacity_violations: Vec::new(),
+                        adjusted_demands: None,
+                        active_bounds: None,
+                        objective_value: None,
+                        outer_iterations: None,
+                        infeasibility_diagnostic: None,
+                        pressure_slips,
+                        pressure_margins,
+                        boundary_supply,
+                        sink_diagnostics,
+                        nova_verdict,
+                    });
+                } else {
+                    let _ = tx.blocking_send(ServerMessage::Cancelled {
+                        run_id,
+                        seq: s,
+                        reason: "diverged".to_string(),
+                    });
+                }
             } else {
                 let _ = tx.blocking_send(ServerMessage::Error {
                     run_id,

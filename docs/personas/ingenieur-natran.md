@@ -82,7 +82,7 @@ Le parcours NoVa Camille est livré sur `main` :
 
 ### Limites restantes
 
-- **Science GasLib-582** : le solveur Newton local peut renvoyer `NotSolvedLocal` sur `mild_618` ; l'escalade IPOPT est opt-in (`GAZFLOW_NOVA_IPOPT_ESCALATION`). Ce n'est pas un bug d'interface.
+- **Science GasLib-582** : Newton peut renvoyer `NotSolvedLocal` sur `mild_618` ; IPOPT in-repo (feature `nlp-ipopt`, défaut Docker) cherche alors un point. Ce n'est pas un bug d'interface. `GAZFLOW_NOVA_IPOPT_ESCALATION=off` désactive.
 - **Étude capacité** : lit le `.scn` enregistré, pas les soutirages locaux non sauvegardés. Enregistrer la nomination réduite avant de re-étudier ce cas.
 - **Pas certifié SIMONE** : outil de simulation comparative, pas un simulateur d'exploitation certifié.
 - **Jargon solveur** encore possible sur les écrans périphériques (calage SCADA, transitoire).

@@ -50,7 +50,7 @@ The tool computes hydraulic operating points (nodal pressures, pipe flows in Nm�
 ### Use cases
 
 - Study hydraulic behaviour under different withdrawal/injection levels and gas compositions (G20, H₂ blends with auto PR-78 above 20 % H₂)
-- **Validate transport nominations (NoVa)**: Map and Workspace share one chain (verdict, deficit causes, per-sink capacity, reduce and re-validate, save reduced `.scn`, N-1 on the last validated nomination, certification report)
+- **Validate transport nominations (NoVa)**: Map and Workspace share one chain (verdict, deficit causes, per-sink capacity, reduce and re-validate, save reduced `.scn`, N-1 on the last validated nomination, certification report). HTTP `POST /api/nova/validate` returns a compact verdict plus `run_id` (no nodal P/Q maps). Workproba and the map can share that run (`GET /api/nova/runs/{id}`, `?run=`).
 - Import a network from **GeoJSON, CSV + YAML mapping, or Shapefile** and run operational scenarios
 - **24 h timeseries** with thermosensitive demand profiles, weather CSV, weekday/weekend curves
 - **N-1 security analysis** with parallel contingency runs, map overlay, Excel/CSV export
@@ -113,7 +113,7 @@ That’s it. Rust and Node toolchains live inside the containers.
 | `./scripts/front-shell.sh`  | Shell in the front container (`npm install`, etc.) |
 | `./scripts/back-test.sh`    | Runs `cargo test` in the container                 |
 | `./scripts/front-test.sh`   | Runs `npm test` in the container                   |
-| `./scripts/ci.sh`           | Full CI (build + back & front tests)               |
+| `./scripts/ci.sh`           | Full CI (build + back & front tests, including `--features nlp-ipopt`) |
 | `./scripts/fetch_gaslib.sh` | Downloads GasLib data                              |
 | `./scripts/validation-pack.sh` | Backend scientific protocol T1→T16 (see `docs/science/validation.md`) |
 
@@ -143,9 +143,9 @@ The `Cargo.toml` and `package.json` files are on the shared volume: changes are 
 ./scripts/validation-pack.sh  # Scientific protocol T1→T16
 ```
 
-Current baseline (2026-07): `cargo test --lib` ~420+ lib tests (recount via `cargo test --lib -- --list`); frontend: see vitest. Scientific thresholds and pack mapping: [validation](docs/science/validation.md). Execution details: [Testing](docs/testing/README.md).
+Current baseline (2026-08): **~458** Rust lib tests without `nlp-ipopt` (**~459** with the feature, recount via `cargo test --lib`); frontend: see vitest. Scientific thresholds and pack mapping: [validation](docs/science/validation.md). Execution details: [Testing](docs/testing/README.md).
 
-Large transport networks (GasLib-582, GasLib-4197): optional smoke tests and env knobs are documented in [Testing](docs/testing/README.md). Model limits (compressor MVP, `.cdf` routing, convergence) are in [Limitations](docs/science/limitations.md).
+Large transport networks (GasLib-582, GasLib-4197): optional smoke tests and env knobs are documented in [Testing](docs/testing/README.md). Model limits (compressor MVP, `.cdf` routing, convergence) are in [Limitations](docs/science/limitations.md). The Docker back image compiles with `--features nlp-ipopt` so IPOPT is the NoVa researcher when Newton does not establish a point (`GAZFLOW_NOVA_IPOPT_ESCALATION=off` to disable).
 
 **GasLib-582 transport (Phase I, juin–juillet 2026)** : bench `nomination_mild_618.scn` via `compressor_diag`. Résidu **2,045 m³/s** avec nomination intacte (partial accept, cible 3×10⁻³). v18 (abandon Q sur boundaries) abaisse le résidu effectif à ~2,0 m³/s mais **viole la nomination** — voir `nomination_mass_balance` et `boundary_nomination_slips` dans le JSON diag. Détails : [bench 582](docs/testing/gaslib-582-compressor-bench.md), [diagnosis 582](docs/testing/gaslib-582-compressor-diagnosis.md).
 

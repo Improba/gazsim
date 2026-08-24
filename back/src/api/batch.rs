@@ -9,7 +9,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ApiError, SharedState, active_dataset_id, active_gas_composition, active_network,
+    ApiError, SharedState, active_dataset_id, resolve_request_gas, resolve_request_network,
     resolve_scenario_xml, scenarios, sync_compressor_map_mode_for_solve,
 };
 
@@ -47,6 +47,9 @@ pub(super) struct CreateBatchRequest {
     pub max_iter: Option<usize>,
     #[serde(default)]
     pub tolerance: Option<f64>,
+    /// Dataset cible (défaut : dataset actif). Ne mute pas l'état global.
+    #[serde(default)]
+    pub dataset_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -164,18 +167,19 @@ fn run_one_case(
 
     match solve {
         Ok(result) => {
-            let diag = crate::solver::compute_nova_diagnostics(&net, scenario, &result);
-            let converged = result.residual <= preset.tolerance;
-            let verdict = super::nova_finalize::finalize_nova_verdict(
+            let newton_diag = crate::solver::compute_nova_diagnostics(&net, scenario, &result);
+            let converged = result.residual <= preset.tolerance && !result.pressures.is_empty();
+            let (verdict, working) = super::nova_finalize::finalize_nova_verdict(
                 &net,
                 Some(scenario),
                 &demands,
                 gas,
-                &diag,
+                &newton_diag,
                 converged,
                 preset.tolerance,
                 &result,
             );
+            let diag = crate::solver::compute_nova_diagnostics(&net, scenario, &working);
             let max_shortfall = diag
                 .pressure_slips
                 .iter()
@@ -189,8 +193,8 @@ fn run_one_case(
                 cause: cause_str(verdict.cause).to_string(),
                 deficit_sinks: verdict.deficit_sinks,
                 max_shortfall_bar: max_shortfall,
-                iterations: result.iterations,
-                residual: result.residual,
+                iterations: working.iterations,
+                residual: working.residual,
                 error: None,
             }
         }
@@ -213,8 +217,9 @@ pub(super) async fn post_batch_run(
     State(state): State<SharedState>,
     Json(payload): Json<CreateBatchRequest>,
 ) -> Result<Json<BatchRunDetail>, (StatusCode, Json<ApiError>)> {
-    let dataset_id = active_dataset_id(&state);
-    let gas = active_gas_composition(&state);
+    let (dataset_id, network_arc) =
+        resolve_request_network(&state, payload.dataset_id.as_deref())?;
+    let gas = resolve_request_gas(&state, &dataset_id);
     let max_iter = payload.max_iter.unwrap_or(400);
     let tolerance = payload.tolerance.unwrap_or(1e-3);
 
@@ -258,7 +263,7 @@ pub(super) async fn post_batch_run(
             )
         })?;
 
-    let network = active_network(&state);
+    let network = (*network_arc).clone();
     let batch_id = format!("batch-{}", now_ms());
     let batch_name = payload
         .name

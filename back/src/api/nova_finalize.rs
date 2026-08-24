@@ -9,7 +9,7 @@ use crate::solver::{
     SolverResult,
 };
 
-/// Mode d'escalade IPOPT piloté par `GAZFLOW_NOVA_IPOPT_ESCALATION` (désactivé par défaut).
+/// Mode d'escalade IPOPT piloté par `GAZFLOW_NOVA_IPOPT_ESCALATION`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum IpoptEscalationMode {
     Off,
@@ -19,7 +19,21 @@ pub(crate) enum IpoptEscalationMode {
     OnNotSolved,
 }
 
-/// Lit le mode d'escalade depuis l'environnement. Off par défaut (IPOPT jamais par défaut).
+fn default_ipopt_escalation_mode() -> IpoptEscalationMode {
+    #[cfg(feature = "nlp-ipopt")]
+    {
+        IpoptEscalationMode::OnNotSolved
+    }
+    #[cfg(not(feature = "nlp-ipopt"))]
+    {
+        IpoptEscalationMode::Off
+    }
+}
+
+/// Lit le mode d'escalade depuis l'environnement.
+/// Avec le feature `nlp-ipopt` : `on-notsolved` par défaut (IPOPT est le chercheur NoVa
+/// quand Newton n'établit pas de point). Sans le feature : `off`.
+/// `off` / `0` / `false` désactive même si le feature est compilé.
 pub(crate) fn ipopt_escalation_mode() -> IpoptEscalationMode {
     static IPOPT_ENV_WITHOUT_FEATURE: std::sync::Once = std::sync::Once::new();
     match std::env::var("GAZFLOW_NOVA_IPOPT_ESCALATION")
@@ -27,7 +41,10 @@ pub(crate) fn ipopt_escalation_mode() -> IpoptEscalationMode {
         .as_deref()
         .map(str::trim)
     {
-        None | Some("") => IpoptEscalationMode::Off,
+        None | Some("") => default_ipopt_escalation_mode(),
+        Some(v) if matches!(v.to_ascii_lowercase().as_str(), "0" | "false" | "off") => {
+            IpoptEscalationMode::Off
+        }
         Some(v) if matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "on") => {
             #[cfg(not(feature = "nlp-ipopt"))]
             IPOPT_ENV_WITHOUT_FEATURE.call_once(|| {
@@ -61,42 +78,72 @@ fn should_attempt_ipopt_escalation(verdict: &NovaVerdict, mode: IpoptEscalationM
     }
 }
 
+const IPOPT_POINT_WARNING: &str = "Point établi par IPOPT (modèle in-repo).";
+
 fn solver_result_from_ipopt_pressures(
-    pressures_bar: HashMap<String, f64>,
+    network: &GasNetwork,
+    demands: &HashMap<String, f64>,
+    gas: GasComposition,
+    pressures_bar: &HashMap<String, f64>,
     base: &SolverResult,
     residual_inf: f64,
     iterations: i32,
 ) -> SolverResult {
-    SolverResult {
-        pressures: pressures_bar,
+    let mut working = crate::solver::newton::solver_result_from_pressures(
+        network,
+        demands,
+        gas,
+        pressures_bar,
+        iterations.max(0) as usize,
+    )
+    .unwrap_or_else(|_| SolverResult {
+        pressures: pressures_bar.clone(),
         flows: base.flows.clone(),
         iterations: iterations.max(0) as usize,
         residual: residual_inf,
         equipment_states: base.equipment_states.clone(),
         warnings: base.warnings.clone(),
         demand_scale_achieved: base.demand_scale_achieved,
+    });
+    working.equipment_states = base.equipment_states.clone();
+    working.warnings = base.warnings.clone();
+    if !working
+        .warnings
+        .iter()
+        .any(|item| item == IPOPT_POINT_WARNING)
+    {
+        working.warnings.push(IPOPT_POINT_WARNING.to_string());
     }
+    if residual_inf.is_finite() {
+        working.residual = residual_inf.min(working.residual);
+    }
+    working
 }
 
 /// Verdict NoVa pour une escalade IPOPT en `BoundViolation` (testable sans IPOPT réel).
 fn ipopt_bound_violation_verdict(
     network: &GasNetwork,
     scenario: Option<&ScenarioDemands>,
+    demands: &HashMap<String, f64>,
+    gas: GasComposition,
     pressures_bar: HashMap<String, f64>,
     base: &NovaVerdict,
     base_result: &SolverResult,
     tol_m3s: f64,
     residual_inf: f64,
     iterations: i32,
-) -> NovaVerdict {
+) -> (NovaVerdict, SolverResult) {
     let ipopt_result = solver_result_from_ipopt_pressures(
-        pressures_bar,
+        network,
+        demands,
+        gas,
+        &pressures_bar,
         base_result,
         residual_inf,
         iterations,
     );
 
-    match scenario {
+    let verdict = match scenario {
         Some(sc) => {
             let diagnostics = solver::compute_nova_diagnostics(network, sc, &ipopt_result);
             let converged = residual_inf <= tol_m3s;
@@ -116,11 +163,14 @@ fn ipopt_bound_violation_verdict(
             iterations: iterations.max(0) as usize,
             solver_signature: NovaSolverSignature::IpoptEscalation,
         },
-    }
+    };
+    (verdict, ipopt_result)
 }
 
 /// Dérive le verdict NoVa à partir des diagnostics et du résultat solveur local.
 /// Peut tenter des redémarrages locaux (pressions scalées) puis escalader vers IPOPT.
+/// Retourne le verdict **et** l'état (pressions/débits) à publier : après IPOPT
+/// c'est le point IPOPT, pas l'itéré Newton non convergé.
 pub(crate) fn finalize_nova_verdict(
     network: &GasNetwork,
     scenario: Option<&ScenarioDemands>,
@@ -130,7 +180,7 @@ pub(crate) fn finalize_nova_verdict(
     converged: bool,
     tol_m3s: f64,
     result: &SolverResult,
-) -> NovaVerdict {
+) -> (NovaVerdict, SolverResult) {
     let mut verdict = solver::nova_verdict(diagnostics, converged, tol_m3s, result);
     let mut working = result.clone();
 
@@ -144,7 +194,7 @@ pub(crate) fn finalize_nova_verdict(
 
     let mode = ipopt_escalation_mode();
     if !should_attempt_ipopt_escalation(&verdict, mode) {
-        return verdict;
+        return (verdict, working);
     }
 
     #[cfg(feature = "nlp-ipopt")]
@@ -160,7 +210,6 @@ pub(crate) fn finalize_nova_verdict(
     {
         let _ = (network, scenario, demands, gas, &working);
         if mode != IpoptEscalationMode::Off {
-            // Documente honnêtement que l'escalade a été demandée mais absente du binaire.
             static WARNED: std::sync::Once = std::sync::Once::new();
             WARNED.call_once(|| {
                 eprintln!(
@@ -170,7 +219,7 @@ pub(crate) fn finalize_nova_verdict(
         }
     }
 
-    verdict
+    (verdict, working)
 }
 
 /// Nombre de redémarrages locaux (pressions scalées) si `NotSolvedLocal`.
@@ -251,7 +300,7 @@ fn try_ipopt_escalation(
     base: &NovaVerdict,
     result: &SolverResult,
     tol_m3s: f64,
-) -> Option<NovaVerdict> {
+) -> Option<(NovaVerdict, SolverResult)> {
     use solver::{NovaIpoptOptions, NovaIpoptVerdict, solve_nova_with_ipopt};
 
     let starts: Vec<Option<HashMap<String, f64>>> = vec![
@@ -276,20 +325,44 @@ fn try_ipopt_escalation(
         };
         match ipopt {
             NovaIpoptVerdict::Feasible {
+                pressures_bar,
                 residual_inf,
                 iterations,
                 ..
             } => {
-                return Some(NovaVerdict {
-                    feasible: true,
-                    deficit_sinks: Vec::new(),
-                    cause: NovaCause::Feasible,
-                    converged: true,
-                    demand_scale_achieved: result.demand_scale_achieved,
-                    residual_m3s: residual_inf,
-                    iterations: iterations.max(0) as usize,
-                    solver_signature: NovaSolverSignature::IpoptEscalation,
-                });
+                let mut working = solver_result_from_ipopt_pressures(
+                    network,
+                    demands,
+                    gas,
+                    &pressures_bar,
+                    result,
+                    residual_inf,
+                    iterations,
+                );
+                working.demand_scale_achieved = Some(1.0);
+                let mut verdict = match scenario {
+                    Some(sc) => {
+                        let diagnostics =
+                            solver::compute_nova_diagnostics(network, sc, &working);
+                        let converged = residual_inf <= tol_m3s;
+                        solver::nova_verdict(&diagnostics, converged, tol_m3s, &working)
+                    }
+                    None => NovaVerdict {
+                        feasible: true,
+                        deficit_sinks: Vec::new(),
+                        cause: NovaCause::Feasible,
+                        converged: true,
+                        demand_scale_achieved: Some(1.0),
+                        residual_m3s: residual_inf,
+                        iterations: iterations.max(0) as usize,
+                        solver_signature: NovaSolverSignature::IpoptEscalation,
+                    },
+                };
+                verdict.solver_signature = NovaSolverSignature::IpoptEscalation;
+                verdict.iterations = iterations.max(0) as usize;
+                verdict.residual_m3s = residual_inf;
+                verdict.demand_scale_achieved = Some(1.0);
+                return Some((verdict, working));
             }
             NovaIpoptVerdict::BoundViolation {
                 pressures_bar,
@@ -300,6 +373,8 @@ fn try_ipopt_escalation(
                 return Some(ipopt_bound_violation_verdict(
                     network,
                     scenario,
+                    demands,
+                    gas,
                     pressures_bar,
                     base,
                     result,
@@ -334,9 +409,26 @@ mod tests {
 
     #[test]
     #[serial]
-    fn ipopt_escalation_mode_off_by_default() {
+    fn ipopt_escalation_mode_default_depends_on_feature() {
         unsafe { std::env::remove_var("GAZFLOW_NOVA_IPOPT_ESCALATION") };
+        #[cfg(feature = "nlp-ipopt")]
+        assert_eq!(ipopt_escalation_mode(), IpoptEscalationMode::OnNotSolved);
+        #[cfg(not(feature = "nlp-ipopt"))]
         assert_eq!(ipopt_escalation_mode(), IpoptEscalationMode::Off);
+    }
+
+    #[test]
+    #[serial]
+    fn ipopt_escalation_mode_off_values() {
+        for value in ["0", "false", "off", "OFF", "False"] {
+            unsafe { std::env::set_var("GAZFLOW_NOVA_IPOPT_ESCALATION", value) };
+            assert_eq!(
+                ipopt_escalation_mode(),
+                IpoptEscalationMode::Off,
+                "expected Off for {value}"
+            );
+        }
+        unsafe { std::env::remove_var("GAZFLOW_NOVA_IPOPT_ESCALATION") };
     }
 
     #[test]
@@ -410,13 +502,13 @@ mod tests {
     #[test]
     #[serial]
     fn finalize_skips_escalation_when_mode_off() {
-        unsafe { std::env::remove_var("GAZFLOW_NOVA_IPOPT_ESCALATION") };
+        unsafe { std::env::set_var("GAZFLOW_NOVA_IPOPT_ESCALATION", "off") };
         let network = GasNetwork::new();
         let demands = HashMap::new();
         let gas = GasComposition::default();
         let diagnostics = NovaDiagnostics::default();
         let result = SolverResult::from_core(HashMap::new(), HashMap::new(), 5, 1.0);
-        let verdict = finalize_nova_verdict(
+        let (verdict, working) = finalize_nova_verdict(
             &network,
             None,
             &demands,
@@ -428,6 +520,8 @@ mod tests {
         );
         assert_eq!(verdict.solver_signature, NovaSolverSignature::Unresolved);
         assert_eq!(verdict.cause, NovaCause::NotSolvedLocal);
+        assert_eq!(working.residual, 1.0);
+        unsafe { std::env::remove_var("GAZFLOW_NOVA_IPOPT_ESCALATION") };
     }
 
     #[test]
@@ -436,9 +530,11 @@ mod tests {
         let base = unresolved_verdict(NovaCause::NotSolvedLocal);
         let result = SolverResult::from_core(HashMap::new(), HashMap::new(), 5, 1.0);
         let pressures = HashMap::from([("n1".to_string(), 10.0)]);
-        let verdict = ipopt_bound_violation_verdict(
+        let (verdict, working) = ipopt_bound_violation_verdict(
             &network,
             None,
+            &HashMap::new(),
+            GasComposition::default(),
             pressures,
             &base,
             &result,
@@ -450,6 +546,14 @@ mod tests {
         assert_eq!(verdict.cause, NovaCause::PressureDeficit);
         assert!(verdict.deficit_sinks.is_empty());
         assert_eq!(verdict.iterations, 42);
+        assert_eq!(working.pressures.get("n1").copied(), Some(10.0));
+        assert!(
+            working
+                .warnings
+                .iter()
+                .any(|item| item.contains("IPOPT")),
+            "IPOPT point must be labelled on the published state"
+        );
     }
 
     #[test]
@@ -526,9 +630,11 @@ mod tests {
             ("S".to_string(), 70.0),
             ("T".to_string(), 50.0),
         ]);
-        let verdict = ipopt_bound_violation_verdict(
+        let (verdict, working) = ipopt_bound_violation_verdict(
             &net,
             Some(&scenario),
+            &HashMap::from([("T".to_string(), -3.0)]),
+            GasComposition::default(),
             ipopt_pressures,
             &base,
             &newton_result,
@@ -540,5 +646,10 @@ mod tests {
         assert!(!verdict.feasible);
         assert!(verdict.deficit_sinks.contains(&"T".to_string()));
         assert_eq!(verdict.iterations, 17);
+        assert_eq!(working.pressures.get("T").copied(), Some(50.0));
+        assert!(
+            working.flows.contains_key("P"),
+            "IPOPT point must recompute pipe flows, not keep Newton flows"
+        );
     }
 }

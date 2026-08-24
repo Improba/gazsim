@@ -5,13 +5,16 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use axum::{Json, extract::State};
+use axum::{
+    Json,
+    extract::{Query, State},
+};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ApiError, SharedState, active_dataset_id, active_gas_composition, active_network,
-    resolve_simulation_demands, sync_compressor_map_mode_for_solve,
+    ApiError, SharedState, resolve_request_gas, resolve_request_network,
+    resolve_simulation_demands_on_dataset, sync_compressor_map_mode_for_solve,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -30,6 +33,12 @@ pub(super) struct NovaScenarioSummary {
 
 fn default_source_bundled() -> String {
     "bundled".to_string()
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub(super) struct ListNovaScenariosQuery {
+    #[serde(default)]
+    pub dataset_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -51,6 +60,9 @@ pub(super) struct ReducedNominationRequest {
     /// Nom du fichier `.scn` produit (défaut : `{stem}_reduit.scn`).
     #[serde(default)]
     pub filename: Option<String>,
+    /// Dataset cible (défaut : dataset actif). Ne mute pas l'état global.
+    #[serde(default)]
+    pub dataset_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -60,6 +72,9 @@ pub(super) struct NovaCapacityRequest {
     /// Sinks à étudier. Si absent → sinks marginaux par défaut présents dans le scénario.
     #[serde(default)]
     pub sink_ids: Option<Vec<String>>,
+    /// Dataset cible (défaut : dataset actif). Ne mute pas l'état global.
+    #[serde(default)]
+    pub dataset_id: Option<String>,
     /// Pas de dichotomie (défaut 6). Coût = (1 + pas) × solves par sink.
     #[serde(default)]
     pub bisection_steps: Option<usize>,
@@ -90,7 +105,6 @@ pub(super) async fn post_nova_capacity(
     State(state): State<SharedState>,
     Json(payload): Json<NovaCapacityRequest>,
 ) -> Result<Json<Vec<crate::solver::SinkCapacityReport>>, (StatusCode, Json<ApiError>)> {
-    let dataset_id = active_dataset_id(&state);
     let scenario_id = payload.scenario_id.trim();
     if scenario_id.is_empty() {
         return Err(api_error(
@@ -98,6 +112,8 @@ pub(super) async fn post_nova_capacity(
             "scenario_id must not be empty",
         ));
     }
+    let (dataset_id, network) =
+        resolve_request_network(&state, payload.dataset_id.as_deref())?;
     let scenario_xml = super::resolve_scenario_xml(&state, &dataset_id, scenario_id)
         .ok_or_else(|| {
             api_error(
@@ -108,9 +124,7 @@ pub(super) async fn post_nova_capacity(
                 ),
             )
         })?;
-
-    let network = active_network(&state);
-    let gas = active_gas_composition(&state);
+    let gas = resolve_request_gas(&state, &dataset_id);
     let bisection_steps = payload
         .bisection_steps
         .filter(|n| *n > 0)
@@ -183,13 +197,20 @@ pub(super) async fn post_nova_capacity(
     Ok(Json(inner?))
 }
 
-/// Liste les `.scn` disponibles pour le dataset actif : bundlés (filesystem récursif)
-/// + importés (SQLite). Dédup par id ; les bundlés priment sur les importés en cas de
-/// collision de stem (réservé : normalement les ids importés sont préfixés `imported-`).
+/// Liste les `.scn` disponibles pour un dataset : bundlés (filesystem récursif)
+/// + importés (SQLite). `dataset_id` query optionnel (défaut : dataset actif).
+/// Ne mute pas l'état global.
 pub(super) async fn list_nova_scenarios(
     State(state): State<SharedState>,
+    Query(query): Query<ListNovaScenariosQuery>,
 ) -> Json<Vec<NovaScenarioSummary>> {
-    let dataset_id = super::active_dataset_id(&state);
+    let dataset_id = query
+        .dataset_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| super::active_dataset_id(&state));
     let dat_dir = state.data_dir.clone();
     let mut out: Vec<NovaScenarioSummary> = Vec::new();
     collect_scenarios(&dat_dir, &dat_dir, &mut out);
@@ -323,7 +344,13 @@ pub(super) async fn post_reduced_nomination(
         }
     }
 
-    let dataset_id = super::active_dataset_id(&state);
+    let dataset_id = payload
+        .dataset_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| super::active_dataset_id(&state));
     let base_scenario_id = payload.base_scenario_id.trim().to_string();
     let base_xml = super::resolve_scenario_xml(&state, &dataset_id, &base_scenario_id)
         .ok_or_else(|| {
@@ -414,6 +441,9 @@ pub(super) struct CompareNominationsRequest {
     pub max_iter: Option<usize>,
     #[serde(default)]
     pub tolerance: Option<f64>,
+    /// Dataset cible (défaut : dataset actif). Ne mute pas l'état global.
+    #[serde(default)]
+    pub dataset_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -433,6 +463,8 @@ pub(super) struct NominationSolveOutcome {
     pub solver_established: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub demand_scale_achieved: Option<f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -467,6 +499,9 @@ pub(super) struct ValidateNominationRequest {
     pub max_iter: Option<usize>,
     #[serde(default)]
     pub tolerance: Option<f64>,
+    /// Dataset cible (défaut : dataset actif). Ne mute pas l'état global.
+    #[serde(default)]
+    pub dataset_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -480,7 +515,9 @@ pub(super) struct CompactDeficit {
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct NovaValidateResponse {
     pub ok: bool,
+    pub run_id: String,
     pub network_id: String,
+    pub dataset_id: String,
     pub nomination_id: String,
     pub feasible: bool,
     pub cause: String,
@@ -519,11 +556,31 @@ fn nova_signature_label(signature: crate::solver::NovaSolverSignature) -> &'stat
     }
 }
 
+fn parse_nova_cause(label: &str) -> crate::solver::NovaCause {
+    match label {
+        "Feasible" => crate::solver::NovaCause::Feasible,
+        "PressureDeficit" => crate::solver::NovaCause::PressureDeficit,
+        "PressureExcess" => crate::solver::NovaCause::PressureExcess,
+        "PressureReachability" => crate::solver::NovaCause::PressureReachability,
+        "ScaleNotAchieved" => crate::solver::NovaCause::ScaleNotAchieved,
+        _ => crate::solver::NovaCause::NotSolvedLocal,
+    }
+}
+
+fn parse_nova_signature(label: &str) -> crate::solver::NovaSolverSignature {
+    match label {
+        "NewtonPosthoc" => crate::solver::NovaSolverSignature::NewtonPosthoc,
+        "IpoptEscalation" => crate::solver::NovaSolverSignature::IpoptEscalation,
+        _ => crate::solver::NovaSolverSignature::Unresolved,
+    }
+}
+
 fn demands_have_non_finite(demands: &HashMap<String, f64>) -> bool {
     demands.values().any(|value| !value.is_finite())
 }
 
 fn compact_validate_response(
+    run_id: String,
     network_id: String,
     nomination_id: String,
     outcome: &NominationSolveOutcome,
@@ -574,10 +631,15 @@ fn compact_validate_response(
                 .to_string(),
         );
     }
+    if outcome.solver_signature == "IpoptEscalation" {
+        limitations.push("Point établi par IPOPT (modèle in-repo).".to_string());
+    }
 
     NovaValidateResponse {
         ok: true,
-        network_id,
+        run_id,
+        network_id: network_id.clone(),
+        dataset_id: network_id,
         nomination_id,
         feasible: outcome.feasible,
         cause: outcome.cause.clone(),
@@ -614,7 +676,7 @@ fn run_nova_solve_with_demands(
         1,
         None,
     );
-    let result = crate::solver::solve_steady_state_with_preset(
+    let result = match crate::solver::solve_steady_state_with_preset(
         network,
         &demands,
         None,
@@ -622,34 +684,49 @@ fn run_nova_solve_with_demands(
         gas,
         |_| crate::solver::SolverControl::Continue,
         None::<fn(crate::solver::ContinuationStepEvent)>,
-    )
-    .map_err(|err| format!("{err:#}"))?;
+    ) {
+        Ok(result) => result,
+        Err(err) => {
+            let msg = format!("{err:#}");
+            if !msg.contains("did not converge") {
+                return Err(msg);
+            }
+            crate::solver::SolverResult::from_core(
+                HashMap::new(),
+                HashMap::new(),
+                0,
+                f64::INFINITY,
+            )
+        }
+    };
 
-    let diag = crate::solver::compute_nova_diagnostics(network, scenario, &result);
-    let converged = result.residual <= preset.tolerance;
-    let verdict = super::nova_finalize::finalize_nova_verdict(
+    let newton_diag = crate::solver::compute_nova_diagnostics(network, scenario, &result);
+    let converged = result.residual <= preset.tolerance && !result.pressures.is_empty();
+    let (verdict, working) = super::nova_finalize::finalize_nova_verdict(
         network,
         Some(scenario),
         &demands,
         gas,
-        &diag,
+        &newton_diag,
         converged,
         preset.tolerance,
         &result,
     );
+    let diag = crate::solver::compute_nova_diagnostics(network, scenario, &working);
     Ok(NominationSolveOutcome {
         scenario_id: String::new(),
         feasible: verdict.feasible,
         cause: nova_cause_label(verdict.cause).to_string(),
         deficit_sinks: verdict.deficit_sinks.clone(),
-        pressures: result.pressures.clone(),
-        flows: result.flows.clone(),
+        pressures: working.pressures.clone(),
+        flows: working.flows.clone(),
         pressure_slips: diag.pressure_slips,
-        iterations: result.iterations,
-        residual: result.residual,
+        iterations: working.iterations,
+        residual: working.residual,
         solver_signature: nova_signature_label(verdict.solver_signature).to_string(),
         solver_established: verdict.converged,
         demand_scale_achieved: verdict.demand_scale_achieved,
+        warnings: working.warnings.clone(),
     })
 }
 
@@ -695,6 +772,7 @@ fn outcome_from_unconverged_solve(
         solver_signature: "Unresolved".to_string(),
         solver_established: false,
         demand_scale_achieved: None,
+        warnings: Vec::new(),
     })
 }
 
@@ -703,9 +781,9 @@ pub(super) async fn post_compare_nominations(
     State(state): State<SharedState>,
     Json(payload): Json<CompareNominationsRequest>,
 ) -> Result<Json<CompareNominationsResponse>, (StatusCode, Json<ApiError>)> {
-    let dataset_id = active_dataset_id(&state);
-    let network = active_network(&state);
-    let gas = active_gas_composition(&state);
+    let (dataset_id, network) =
+        resolve_request_network(&state, payload.dataset_id.as_deref())?;
+    let gas = resolve_request_gas(&state, &dataset_id);
     let max_iter = payload.max_iter.unwrap_or(400);
     let tolerance = payload.tolerance.unwrap_or(1e-3);
     let robust = payload.robust_mode.unwrap_or(true);
@@ -856,7 +934,8 @@ pub(super) async fn post_nova_validate(
     }
 
     let scenario_id = payload.scenario_id.trim().to_string();
-    let dataset_id = active_dataset_id(&state);
+    let (dataset_id, network) =
+        resolve_request_network(&state, payload.dataset_id.as_deref())?;
     let _xml = super::resolve_scenario_xml(&state, &dataset_id, &scenario_id).ok_or_else(
         || {
             api_error(
@@ -869,16 +948,16 @@ pub(super) async fn post_nova_validate(
         },
     )?;
 
-    let network = active_network(&state);
-    let gas = active_gas_composition(&state);
+    let gas = resolve_request_gas(&state, &dataset_id);
     let max_iter = payload.max_iter.unwrap_or(400);
     let tolerance = payload.tolerance.unwrap_or(1e-3);
     let robust = payload.robust_mode.unwrap_or(true);
     let applied_overrides = payload.demands.clone().unwrap_or_default();
 
-    let (demands, scenario) = resolve_simulation_demands(
+    let (demands, scenario) = resolve_simulation_demands_on_dataset(
         &state,
         &network,
+        &dataset_id,
         Some(scenario_id.as_str()),
         payload.demands.as_ref(),
     )
@@ -904,6 +983,7 @@ pub(super) async fn post_nova_validate(
     let pool = state.rayon_pool.clone();
     let state_for_mode = state.clone();
     let network_for_solve = (*network).clone();
+    let demands_for_store = demands.clone();
     let join = tokio::task::spawn_blocking(move || {
         let _permit = permit;
         pool.install(|| {
@@ -929,7 +1009,45 @@ pub(super) async fn post_nova_validate(
     };
     outcome.scenario_id = scenario_id.clone();
 
+    let run_id = super::nova_runs::allocate_run_id(&state);
+    super::nova_runs::store_nova_run(
+        &state,
+        super::nova_runs::NovaRunRecord::from_solve(
+            run_id.clone(),
+            dataset_id.clone(),
+            Some(scenario_id.clone()),
+            "validate",
+            demands_for_store,
+            {
+                let mut stored = crate::solver::SolverResult::from_core(
+                    outcome.pressures.clone(),
+                    outcome.flows.clone(),
+                    outcome.iterations,
+                    outcome.residual,
+                );
+                stored.warnings = outcome.warnings.clone();
+                stored.demand_scale_achieved = outcome.demand_scale_achieved;
+                stored
+            },
+            outcome.pressure_slips.clone(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Some(crate::solver::NovaVerdict {
+                feasible: outcome.feasible,
+                deficit_sinks: outcome.deficit_sinks.clone(),
+                cause: parse_nova_cause(&outcome.cause),
+                converged: outcome.solver_established,
+                demand_scale_achieved: outcome.demand_scale_achieved,
+                residual_m3s: outcome.residual,
+                iterations: outcome.iterations,
+                solver_signature: parse_nova_signature(&outcome.solver_signature),
+            }),
+        ),
+    );
+
     Ok(Json(compact_validate_response(
+        run_id,
         dataset_id,
         scenario_id,
         &outcome,
@@ -1510,8 +1628,10 @@ mod tests {
             solver_signature: "Unresolved".into(),
             solver_established: false,
             demand_scale_achieved: None,
+            warnings: Vec::new(),
         };
         let json = serde_json::to_value(compact_validate_response(
+            "run-test".into(),
             "GasLib-11".into(),
             "nom".into(),
             &outcome,
@@ -1522,9 +1642,11 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(json["ok"], true);
+        assert_eq!(json["run_id"], "run-test");
         assert_eq!(json["feasible"], false);
         assert_eq!(json["cause"], "NotSolvedLocal");
         assert_eq!(json["network_id"], "GasLib-11");
+        assert_eq!(json["dataset_id"], "GasLib-11");
         assert_eq!(json["nomination_id"], "nom");
         assert_eq!(json["applied_overrides"]["exit01"], 0.0);
         assert_eq!(json["worst_sink"], "exit01");
@@ -1665,6 +1787,7 @@ mod tests {
             serde_json::from_slice(&to_bytes(resp.into_body(), usize::MAX).await.unwrap()).unwrap();
         assert_eq!(status, StatusCode::OK, "validate failed: {v}");
         assert_eq!(v["ok"], true);
+        assert!(v["run_id"].as_str().unwrap().starts_with("run-"));
         assert_eq!(v["nomination_id"], nomination_id);
         assert!(v["cause"].is_string());
         assert!(v["solver_signature"].is_string());
@@ -1675,6 +1798,45 @@ mod tests {
         assert_eq!(v["applied_overrides"]["exit01"], 0.0);
         assert!(v.get("pressures").is_none());
         assert!(v.get("flows").is_none());
+
+        let run_id = v["run_id"].as_str().unwrap().to_string();
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!("/api/nova/runs/{run_id}"))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let compact: serde_json::Value =
+            serde_json::from_slice(&to_bytes(resp.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(compact["run_id"], run_id);
+        assert_eq!(compact["dataset_id"], "test");
+        assert!(compact.get("pressures").is_none());
+        assert!(compact.get("flows").is_none());
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!("/api/nova/runs/{run_id}/state"))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let full: serde_json::Value =
+            serde_json::from_slice(&to_bytes(resp.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert!(full["pressures"].is_object());
+        assert!(full["flows"].is_object());
+        assert_eq!(full["dataset_id"], "test");
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/networks")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let networks: serde_json::Value =
+            serde_json::from_slice(&to_bytes(resp.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(networks["active"], "test");
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

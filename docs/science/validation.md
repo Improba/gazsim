@@ -321,10 +321,9 @@ Root cause of the earlier false verdict: the capacity study fixed multiple press
   against feasibility. The honest local verdict remains "not solved (local)".
 - **Engineering / CI**: solver is stable (hard compressor coupling capped by `pressureOutMax`, CV setpoint infrastructure, component anchoring, bounded NoVa mode). Baselines preserved; 361 lib tests pass (only pre-existing flaky `test_ws_timeout_diverged` fails).
 - **Demo recommendation**: `nomination_mild_618` is feasible and may be shown, with the
-  caveat that the in-repo local solver does not itself converge to the feasible point; the
-  feasibility is established by the external IPOPT model. Improving the in-repo solver's
-  non-convex convergence (multistart, continuation, or SQP/IPOPT backend) is the remaining
-  engineering work to make the local verdict match the external one.
+  the caveat that the in-repo **Newton** may not itself converge; the product then escalates
+  to IPOPT on the in-repo NLP (`nlp-ipopt`). Feasibility is also established by the external
+  IPOPT/Pyomo model. `NotSolvedLocal` without an IPOPT point remains an honest local miss.
 
 ### Phase VIII-ter — in-repo solver convergence investigation (July 2026)
 
@@ -354,11 +353,4 @@ converge to the feasible point on `mild_618` (so the local verdict would match t
    uniform-start IPOPT did not find a feasible point in 6 starts, so a matched-K warm-start
    point could not be produced cheaply.
 
-**Conclusion (engineering).** The in-repo penalty-Newton is **not robust enough** for this
-non-convex NoVa NLP: it diverges even when started near a feasible point of a closely-related
-model. Continuation and warm-start are insufficient. Closing the gap so the local verdict
-matches the external `Feasible` requires a **solver upgrade**: a trust-region / SQP Newton, or
-an external IPOPT backend solving the in-repo model directly (eliminating the model mismatch).
-The honest local verdict remains `NotSolvedLocal`; the feasibility of `mild_618` is settled by
-the external IPOPT proof (Phase VIII-bis). The `GAZFLOW_INITIAL_PRESSURES_FILE` warm-start hook
-is kept as a general capability.
+**Conclusion (engineering, août 2026).** The in-repo penalty-Newton remains **not robust enough** for this non-convex NoVa NLP from a cold start (continuation and Pyomo warm-start are insufficient). The **product path** now escalates to **IPOPT on the in-repo NLP** (`feature nlp-ipopt`, default `GAZFLOW_NOVA_IPOPT_ESCALATION=on-notsolved` in the Docker back image) and publishes that point when found. The independent external IPOPT/Pyomo proof (Phase VIII-bis, ρ_eff=50) still stands; it is not the same model. A Newton `NotSolvedLocal` **without** an IPOPT point remains the honest local miss. `GAZFLOW_INITIAL_PRESSURES_FILE` is kept as a general capability. `GAZFLOW_NOVA_IPOPT_ESCALATION=off` restores Newton-only.

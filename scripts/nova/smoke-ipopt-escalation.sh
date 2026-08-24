@@ -13,8 +13,8 @@
 # Hors scope (volontaire) :
 #   - Escalade mild_618 de bout en bout via `compressor_diag` : ce binaire n'appelle pas
 #     `finalize_nova_verdict` (API REST/WS uniquement). Pour mild_618 + signature
-#     IpoptEscalation, lancer le backend buildé avec `--features nlp-ipopt` et
-#     `GAZFLOW_NOVA_IPOPT_ESCALATION=on-notsolved`.
+#     IpoptEscalation, lancer le backend buildé avec `--features nlp-ipopt`
+#     (défaut Docker : OnNotSolved). `GAZFLOW_NOVA_IPOPT_ESCALATION=off` pour désactiver.
 #   - Pas d'env `GAZFLOW_NOVA_IPOPT` : seule `GAZFLOW_NOVA_IPOPT_ESCALATION` pilote l'escalade.
 #
 # Usage (depuis gazsim/) :
@@ -59,12 +59,12 @@ echo "==> [1/3] cargo check --features nlp-ipopt"
 run 'set -e; cargo check --features nlp-ipopt --lib 2>&1 | tee /tmp/check.log | tail -8; grep -q "Finished" /tmp/check.log'
 
 echo "==> [2/3] unit tests api::nova_finalize (escalation gates)"
-run 'set -e; cargo test --features nlp-ipopt --lib nova_finalize -- --nocapture 2>&1 | tee /tmp/nf.log | tail -30; grep -q "9 passed" /tmp/nf.log'
+run 'set -e; cargo test --features nlp-ipopt --lib nova_finalize -- --nocapture 2>&1 | tee /tmp/nf.log | tail -30; grep -q "test result: ok" /tmp/nf.log'
 
 echo "==> [3/3] FFI IPOPT two_node (solve_nova_with_ipopt)"
 run 'set -e; cargo test --features nlp-ipopt --lib ipopt_solves_two_node_feasible -- --nocapture 2>&1 | tee /tmp/ip.log | tail -40; grep -q "1 passed" /tmp/ip.log'
 
 echo
 echo "OK smoke IPOPT NoVa (gates + FFI)."
-echo "Escalade mild_618 (signature IpoptEscalation) : backend --features nlp-ipopt +"
-echo "  GAZFLOW_NOVA_IPOPT_ESCALATION=on-notsolved  (pas compressor_diag)."
+echo "Escalade mild_618 (signature IpoptEscalation) : backend --features nlp-ipopt"
+echo "  (défaut OnNotSolved ; GAZFLOW_NOVA_IPOPT_ESCALATION=off pour désactiver)."

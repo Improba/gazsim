@@ -75,3 +75,6 @@ Use `sudo` for all `docker` / `docker compose` commands (the `ubuntu` user is in
 - The frontend container runs `npm install` on startup (CMD in Dockerfile). If `node_modules` volume is stale after dependency changes, remove it: `sudo docker volume rm workspace_front-node-modules` then restart.
 - `cargo watch` hot-reloads the backend on file changes; no manual restart needed.
 - The `back/dat/` directory is `.gitignored` — always re-run `fetch_gaslib.sh` on a fresh clone.
+- After changing `docker/Dockerfile.back` (Ipopt, CMD features), rebuild the image: `docker compose build back`. Volume mounts do not pick up apt packages.
+- Compose sets `OMP_NUM_THREADS=1` on `back` (IPOPT reproducibility). Keep it for `cargo test --features nlp-ipopt`.
+- `./docs` is mounted at `/docs` in both `back` and `front` (`include_str` / `gas-presets.spec.ts`). Do not drop that volume.

@@ -8,12 +8,14 @@ services:
       - "3001:3001"
     volumes:
       - ./back:/app                    # code source partagé
+      - ./docs:/docs                   # include_str ../../../docs depuis back/src
       - cargo-registry:/usr/local/cargo/registry
       - cargo-git:/usr/local/cargo/git
       - back-target:/app/target        # cache de compilation
     environment:
       - RUST_LOG=info
       - CARGO_HOME=/usr/local/cargo
+      - OMP_NUM_THREADS=1
     working_dir: /app
     tty: true
 
@@ -26,6 +28,7 @@ services:
       - "9000:9000"
     volumes:
       - ./front:/app                   # code source partagé
+      - ./docs:/docs
       - front-node-modules:/app/node_modules
     environment:
       - NODE_ENV=development

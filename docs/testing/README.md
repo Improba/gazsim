@@ -39,11 +39,13 @@ GAZFLOW_REFERENCE_SOLUTION_PATH=/path/to/reference.sol cargo test test_gaslib_11
 From the project root:
 
 ```bash
-./scripts/back-test.sh     # Rust backend tests
-./scripts/front-test.sh    # Frontend tests
-./scripts/ci.sh            # Full build + tests (+ verify_test_corpus.sh)
+./scripts/back-test.sh     # Rust backend tests (Docker)
+./scripts/front-test.sh    # Frontend tests (Docker)
+./scripts/ci.sh            # Full build + tests, including cargo test --features nlp-ipopt
 ./scripts/validation-pack.sh # Backend scientific protocol T1→T16
 ```
+
+`docker-compose.yml` mounts `./docs` at `/docs` on `back` and `front` (needed for `include_str` of `docs/contracts/gas-presets.json` and the frontend spec). Compose sets `OMP_NUM_THREADS=1` on `back`.
 
 ## Backend tests
 
@@ -52,6 +54,7 @@ Full run:
 ```bash
 ./scripts/back-shell.sh
 cargo test
+cargo test --features nlp-ipopt   # IPOPT researcher + FFI; keep OMP_NUM_THREADS=1
 ```
 
 Targeted test:
@@ -75,7 +78,7 @@ Common alternative:
 npx vitest run
 ```
 
-Current baseline (2026-07): **~420+** Rust lib tests (recount via `cargo test --lib`); frontend: see vitest.
+Current baseline (2026-08): **~458** Rust lib tests without `nlp-ipopt` (**~459** with the feature); frontend: see vitest.
 
 Current frontend coverage includes:
 - `src/services/ws.spec.ts`, `apiContracts.spec.ts`, `gas-presets.spec.ts`
@@ -226,6 +229,10 @@ Bench results (I-A0, juin 2026) : [gaslib-582-compressor-bench.md](./gaslib-582-
 | `GAZFLOW_FORCE_CDF_ROUTING` | Run CDF screening on large connected baselines | off when baseline connected and N > 500 |
 | `GAZFLOW_ENABLE_LARGE_DATASET_TESTS` | Enable `test_solve_gaslib_582` / 4197 in `cargo test` | off in CI |
 | `GAZFLOW_REQUIRE_FULL_CONVERGENCE` | Strict large-dataset smoke (residual < tol, scale $\geq$ 0.999) | off (robust log-only) |
+| `GAZFLOW_NOVA_IPOPT_ESCALATION` | NoVa researcher: after Newton, run IPOPT on the in-repo NLP (`nlp-ipopt`). `on-notsolved` / `on` / `off` | `on-notsolved` when the binary is built with `nlp-ipopt`; otherwise off |
+| `GAZFLOW_NOVA_LOCAL_RESTARTS` | Scaled-pressure Newton restarts before IPOPT | `2` |
+
+There is no `GAZFLOW_NOVA_IPOPT` env. CI step `[4b/8]` runs `docker compose run --rm -e OMP_NUM_THREADS=1 back cargo test --features nlp-ipopt`. See also `scripts/nova/README.md` (Compose back image and optional `gazflow-ipopt` smoke).
 
 See also the transport `.cdf` routing variables in the [GasLib datasets](#gaslib-datasets-smokescaling) section above.
 

@@ -81,15 +81,19 @@ The in-repo `compressor_diag` accepts `GAZFLOW_INITIAL_PRESSURES_FILE=PATH` (JSO
 `GAZFLOW_CONTINUATION_SCALES=1.0` (direct solve) and the `phase-viii-ter-warmstart` bench tag,
 this tests whether the in-repo penalty-Newton can converge from the IPOPT feasible point. It
 cannot (it diverges to residual ≈ 69.8 then errors) — the penalty-Newton is not robust enough
-on this non-convex NLP; a trust-region/SQP or IPOPT backend upgrade is needed. See
+on this non-convex NLP. The **product path** (HTTP / WS NoVa) now escalates to IPOPT on the
+in-repo model (`feature nlp-ipopt`); `compressor_diag` still does **not**. See
 `docs/science/validation.md` (Phase VIII-ter).
 
 ## Smoke in-repo IPOPT escalation (`nlp-ipopt`)
 
-Le feature Cargo `nlp-ipopt` lie la lib C Ipopt (`coinor-libipopt-dev`). **Pas installé sur l'hôte par défaut** — utiliser l'image `gazflow-ipopt` :
+Le feature Cargo `nlp-ipopt` lie la lib C Ipopt (`coinor-libipopt-dev`). **Pas installé sur l'hôte par défaut.** L'image Docker Compose `back` (`docker/Dockerfile.back`) installe désormais Ipopt et lance le binaire avec `--features nlp-ipopt`. Après un changement de Dockerfile, reconstruire : `docker compose build back`.
 
 ```bash
-# one-off image (si absente)
+# tests lib avec le feature (même image que le service back)
+docker compose run --rm -e OMP_NUM_THREADS=1 back cargo test --features nlp-ipopt
+
+# image smoke dédiée (optionnel, si on n'utilise pas Compose)
 docker build -t gazflow-ipopt -f docker/Dockerfile.ipopt docker/
 
 # micro-smoke : check + gates GAZFLOW_NOVA_IPOPT_ESCALATION + FFI two_node
@@ -100,7 +104,7 @@ Variables :
 
 | Env | Rôle |
 |-----|------|
-| `GAZFLOW_NOVA_IPOPT_ESCALATION` | `off` (défaut) / `on`\|`1`\|`true` / `on-notsolved` |
+| `GAZFLOW_NOVA_IPOPT_ESCALATION` | avec `nlp-ipopt` : `on-notsolved` (défaut) / `on` / `off` |
 | *(pas de `GAZFLOW_NOVA_IPOPT`)* | n'existe pas ; ne pas confondre |
 
-`finalize_nova_verdict` (API) tente IPOPT seulement si signature `Unresolved` et mode On / OnNotSolved. `compressor_diag` **ne branche pas** cette escalade.
+`finalize_nova_verdict` (API REST / WS) utilise IPOPT comme chercheur NoVa quand Newton n'établit pas de point (`OnNotSolved` par défaut si le binaire est compilé avec `nlp-ipopt`). `compressor_diag` **ne branche pas** cette escalade. `GAZFLOW_NOVA_IPOPT_ESCALATION=off` désactive.

@@ -29,6 +29,7 @@ mod compressor;
 mod network_edit;
 mod nova;
 mod nova_finalize;
+mod nova_runs;
 mod scenarios;
 mod ws;
 
@@ -83,6 +84,7 @@ pub(crate) struct AppState {
     scenario_baselines: scenarios::ScenarioBaselines,
     compressor_map_mode_override: Arc<RwLock<Option<solver::CompressorMapMode>>>,
     last_simulation: Arc<RwLock<Option<LastSimulationSnapshot>>>,
+    nova_runs: Arc<RwLock<nova_runs::NovaRunStore>>,
 }
 
 type SharedState = Arc<AppState>;
@@ -208,6 +210,7 @@ pub fn create_router_with_repo_and_datasets(
         scenario_baselines: Arc::new(RwLock::new(HashMap::new())),
         compressor_map_mode_override: Arc::new(RwLock::new(None)),
         last_simulation: Arc::new(RwLock::new(None)),
+        nova_runs: Arc::new(RwLock::new(nova_runs::NovaRunStore::default())),
     });
 
     let initial_network = shared
@@ -266,6 +269,16 @@ pub fn create_router_with_repo_and_datasets(
         .route("/api/nova/capacity", post(nova::post_nova_capacity))
         .route("/api/nova/compare", post(nova::post_compare_nominations))
         .route("/api/nova/validate", post(nova::post_nova_validate))
+        .route("/api/nova/runs", get(nova_runs::list_nova_runs))
+        .route("/api/nova/runs/{id}", get(nova_runs::get_nova_run))
+        .route(
+            "/api/nova/runs/{id}/state",
+            get(nova_runs::get_nova_run_state),
+        )
+        .route(
+            "/api/nova/runs/{id}/apply",
+            post(nova_runs::post_apply_nova_run),
+        )
         .route(
             "/api/batch/runs",
             get(batch::list_batch_runs).post(batch::post_batch_run),
@@ -504,6 +517,9 @@ struct ContingencyRequest {
     scope: ContingencyScope,
     #[serde(default)]
     custom_cases: Option<Vec<solver::ContingencyCase>>,
+    /// Dataset cible (défaut : dataset actif). Ne mute pas l'état global.
+    #[serde(default)]
+    dataset_id: Option<String>,
 }
 
 fn default_timeseries_max_iter() -> usize {
@@ -731,17 +747,29 @@ async fn select_network(
     State(state): State<SharedState>,
     Json(payload): Json<SelectNetworkRequest>,
 ) -> Result<Json<SelectNetworkResponse>, (StatusCode, Json<ApiError>)> {
+    let (node_count, edge_count) = try_activate_dataset(&state, &payload.dataset_id)?;
+    Ok(Json(SelectNetworkResponse {
+        active: payload.dataset_id,
+        node_count,
+        edge_count,
+    }))
+}
+
+pub(crate) fn try_activate_dataset(
+    state: &SharedState,
+    dataset_id: &str,
+) -> Result<(usize, usize), (StatusCode, Json<ApiError>)> {
     let known = state
         .available_datasets
         .read()
         .expect("available datasets lock should not be poisoned")
         .iter()
-        .any(|id| id == &payload.dataset_id);
+        .any(|id| id == dataset_id);
     if !known {
         return Err((
             StatusCode::NOT_FOUND,
             Json(ApiError {
-                error: format!("unknown dataset id: {}", payload.dataset_id),
+                error: format!("unknown dataset id: {dataset_id}"),
             }),
         ));
     }
@@ -755,36 +783,33 @@ async fn select_network(
         ));
     }
 
-    if payload.dataset_id.starts_with("import-") {
+    if dataset_id.starts_with("import-") {
         let imported = state
             .imported
             .read()
             .expect("imported lock should not be poisoned");
-        let dataset = imported.get(&payload.dataset_id).ok_or_else(|| {
+        let dataset = imported.get(dataset_id).ok_or_else(|| {
             (
                 StatusCode::NOT_FOUND,
                 Json(ApiError {
-                    error: format!("imported dataset not found: {}", payload.dataset_id),
+                    error: format!("imported dataset not found: {dataset_id}"),
                 }),
             )
         })?;
         let node_count = dataset.network.node_count();
         let edge_count = dataset.network.edge_count();
-        activate_imported_dataset(&state, &payload.dataset_id, dataset);
-        return Ok(Json(SelectNetworkResponse {
-            active: payload.dataset_id,
-            node_count,
-            edge_count,
-        }));
+        activate_imported_dataset(state, dataset_id, dataset);
+        return Ok((node_count, edge_count));
     }
 
-    let (network, default_demands) = load_dataset_from_disk(&state.data_dir, &payload.dataset_id)
-        .map_err(|err| {
-        (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(ApiError { error: err }),
-        )
-    })?;
+    let (network, default_demands) = load_dataset_from_disk(&state.data_dir, dataset_id).map_err(
+        |err| {
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(ApiError { error: err }),
+            )
+        },
+    )?;
     let node_count = network.node_count();
     let edge_count = network.edge_count();
 
@@ -807,19 +832,19 @@ async fn select_network(
             .active_dataset
             .write()
             .expect("active dataset lock should not be poisoned");
-        *guard = payload.dataset_id.clone();
+        *guard = dataset_id.to_string();
     }
     set_active_gas_composition(
-        &state,
-        if payload.dataset_id.starts_with("GasLib") {
+        state,
+        if dataset_id.starts_with("GasLib") {
             solver::GasComposition::pure_ch4()
         } else {
             solver::GasComposition::default()
         },
     );
     init_dataset_baseline(
-        &state,
-        &payload.dataset_id,
+        state,
+        dataset_id,
         state
             .network
             .read()
@@ -827,11 +852,7 @@ async fn select_network(
             .as_ref(),
     );
 
-    Ok(Json(SelectNetworkResponse {
-        active: payload.dataset_id,
-        node_count,
-        edge_count,
-    }))
+    Ok((node_count, edge_count))
 }
 
 pub(crate) fn activate_imported_dataset(
@@ -1304,18 +1325,25 @@ async fn compute_contingency_report(
     state: &SharedState,
     payload: ContingencyRequest,
 ) -> Result<solver::ContingencyReport, (StatusCode, Json<ApiError>)> {
-    let network = active_network(state);
+    let (dataset_id, network) = resolve_request_network(state, payload.dataset_id.as_deref())?;
     let scenario_id = payload
         .scenario_id
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty());
-    let (demands, scenario) = resolve_contingency_demands(
+    let (demands, scenario) = resolve_simulation_demands_on_dataset(
         state,
         &network,
+        &dataset_id,
         scenario_id,
         payload.demands.as_ref(),
-    )?;
+    )
+    .map_err(|err| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ApiError { error: err }),
+        )
+    })?;
     let network_for_solve = scenario
         .as_ref()
         .map(|sc| gaslib::network_with_scenario_boundaries_for_nova(&network, sc))
@@ -1336,7 +1364,7 @@ async fn compute_contingency_report(
             )
         })?;
     let pool = state.rayon_pool.clone();
-    let gas_composition = active_gas_composition(state);
+    let gas_composition = resolve_request_gas(state, &dataset_id);
     let state_for_mode = state.clone();
 
     tokio::task::spawn_blocking(move || {
@@ -1558,6 +1586,129 @@ async fn run_simulation_with_demands(
     store_last_simulation(state, demands_for_snapshot, snapshot_result);
 
     Ok(Json(response))
+}
+
+/// Résout le réseau pour une requête HTTP sans muter le dataset actif
+/// (Workproba et l'UI peuvent coexister). `None` = dataset actif.
+pub(crate) fn resolve_request_network(
+    state: &SharedState,
+    dataset_id: Option<&str>,
+) -> Result<(String, Arc<GasNetwork>), (StatusCode, Json<ApiError>)> {
+    let active = active_dataset_id(state);
+    let requested = dataset_id
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .unwrap_or(active.as_str());
+    if requested == active {
+        return Ok((active, active_network(state)));
+    }
+
+    {
+        let imported = state
+            .imported
+            .read()
+            .expect("imported lock should not be poisoned");
+        if let Some(dataset) = imported.get(requested) {
+            return Ok((
+                requested.to_string(),
+                Arc::new(clone_network(&dataset.network)),
+            ));
+        }
+    }
+
+    let known = state
+        .available_datasets
+        .read()
+        .expect("available datasets lock should not be poisoned")
+        .iter()
+        .any(|id| id == requested);
+    if !known {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: format!("unknown dataset id: {requested}"),
+            }),
+        ));
+    }
+
+    let (network, _) = load_dataset_from_disk(&state.data_dir, requested).map_err(|err| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ApiError { error: err }),
+        )
+    })?;
+    Ok((requested.to_string(), Arc::new(network)))
+}
+
+/// Composition gaz du dataset cible sans muter l'état actif.
+pub(crate) fn resolve_request_gas(
+    state: &SharedState,
+    dataset_id: &str,
+) -> solver::GasComposition {
+    if dataset_id == active_dataset_id(state) {
+        return active_gas_composition(state);
+    }
+    {
+        let imported = state
+            .imported
+            .read()
+            .expect("imported lock should not be poisoned");
+        if let Some(dataset) = imported.get(dataset_id) {
+            return dataset.gas_composition;
+        }
+    }
+    if dataset_id.starts_with("GasLib") {
+        solver::GasComposition::pure_ch4()
+    } else {
+        solver::GasComposition::default()
+    }
+}
+
+fn default_demands_for_dataset(state: &SharedState, dataset_id: &str) -> HashMap<String, f64> {
+    if dataset_id == active_dataset_id(state) {
+        return (*active_default_demands(state)).clone();
+    }
+    {
+        let imported = state
+            .imported
+            .read()
+            .expect("imported lock should not be poisoned");
+        if let Some(dataset) = imported.get(dataset_id) {
+            return dataset.default_demands.clone();
+        }
+    }
+    load_dataset_from_disk(&state.data_dir, dataset_id)
+        .map(|(_, demands)| demands)
+        .unwrap_or_default()
+}
+
+pub(crate) fn resolve_simulation_demands_on_dataset(
+    state: &SharedState,
+    network: &GasNetwork,
+    dataset_id: &str,
+    scenario_id: Option<&str>,
+    client_demands: Option<&HashMap<String, f64>>,
+) -> Result<(HashMap<String, f64>, Option<gaslib::ScenarioDemands>), String> {
+    if let Some(scenario_id) = scenario_id {
+        let mut scenario = load_scenario_demands_by_id(state, dataset_id, scenario_id)?;
+        gaslib::enrich_scenario_with_balance_hub(network, &mut scenario);
+        let mut base = gaslib::effective_solver_demands_for_network(
+            network,
+            &scenario.demands,
+            &scenario,
+        );
+        if let Some(overrides) = client_demands {
+            for (key, value) in overrides {
+                base.insert(key.clone(), *value);
+            }
+        }
+        Ok((base, Some(scenario)))
+    } else {
+        let demands = client_demands
+            .cloned()
+            .unwrap_or_else(|| default_demands_for_dataset(state, dataset_id));
+        Ok((demands, None))
+    }
 }
 
 fn active_network(state: &SharedState) -> Arc<GasNetwork> {
@@ -2078,6 +2229,7 @@ mod tests {
             scenario_baselines: Arc::new(RwLock::new(HashMap::new())),
             compressor_map_mode_override: Arc::new(RwLock::new(None)),
             last_simulation: Arc::new(RwLock::new(None)),
+            nova_runs: Arc::new(RwLock::new(super::nova_runs::NovaRunStore::default())),
         })
     }
 
@@ -2100,6 +2252,47 @@ mod tests {
             resolve_simulation_demands(&state, &network, None, Some(&body)).expect("body");
         assert!(scenario.is_none());
         assert_eq!(resolved.get("sink").copied(), Some(-12.0));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn resolve_request_network_does_not_switch_active_dataset() {
+        let tmp = contingency_scratch_dir("resolve-iso");
+        let network = contingency_test_network();
+        let state = contingency_test_state(network.clone(), HashMap::new(), tmp.clone());
+        {
+            let mut imported = state
+                .imported
+                .write()
+                .expect("imported lock");
+            imported.insert(
+                "other".to_string(),
+                ImportedDataset {
+                    network: network.clone(),
+                    default_demands: HashMap::new(),
+                    gas_composition: solver::GasComposition::pure_ch4(),
+                },
+            );
+        }
+        {
+            let mut available = state
+                .available_datasets
+                .write()
+                .expect("available lock");
+            available.push("other".to_string());
+        }
+
+        let before = active_dataset_id(&state);
+        let (resolved_id, _) =
+            resolve_request_network(&state, Some("other")).expect("imported dataset");
+        assert_eq!(resolved_id, "other");
+        assert_eq!(active_dataset_id(&state), before);
+        assert_eq!(before, "test");
+        assert_eq!(
+            resolve_request_gas(&state, "other"),
+            solver::GasComposition::pure_ch4()
+        );
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

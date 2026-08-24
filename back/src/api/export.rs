@@ -1194,6 +1194,7 @@ mod tests {
             scenario_baselines: Arc::new(RwLock::new(HashMap::new())),
             compressor_map_mode_override: Arc::new(RwLock::new(None)),
             last_simulation: Arc::new(RwLock::new(None)),
+            nova_runs: Arc::new(RwLock::new(super::super::nova_runs::NovaRunStore::default())),
         })
     }
 

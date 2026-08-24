@@ -87,13 +87,29 @@ paths:
   /api/nova/scenarios:
     get:
       summary: Liste des nominations `.scn` (bundlées + importées)
+      description: Query optionnel `dataset_id` (défaut : dataset actif). Ne mute pas l'état global.
   /api/nova/validate:
     post:
       summary: Valide une nomination NoVa (verdict compact HTTP)
       description: |
         Charge le `.scn` (`scenario_id`), fusionne les overrides de soutirage
         (un `0` explicite coupe le sink) et renvoie un verdict Camille sans
-        cartes nodales P/Q. Alternative HTTP au WebSocket `start_simulation`.
+        cartes nodales P/Q. `dataset_id` optionnel : résout ce réseau **sans**
+        changer le dataset actif de l'UI. Réponse : `run_id` pour relire le run
+        (`GET /api/nova/runs/{id}`) ou hydrater la carte (`GET .../state`,
+        `POST .../apply`, query UI `?run=`).
+  /api/nova/runs:
+    get:
+      summary: Liste des runs NoVa récents (verdicts compacts, sans P/Q)
+  /api/nova/runs/{id}:
+    get:
+      summary: Verdict compact d'un run (Workproba)
+  /api/nova/runs/{id}/state:
+    get:
+      summary: État nodal P/Q d'un run (UI / carte)
+  /api/nova/runs/{id}/apply:
+    post:
+      summary: Active le dataset du run si besoin et pose last_simulation (UI)
   /api/nova/capacity:
     post:
       summary: Étude capacité par sink (dichotomie)

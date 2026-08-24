@@ -54,16 +54,18 @@ This document describes the known limits of the solver in its current state. It 
 - **Capacity study** (`POST /api/nova/capacity`) reads the **registered `.scn`**, not in-session slider overrides. To study a reduced case, save the reduced nomination first. A sink with nominal Q ≈ 0 is vacuously feasible (`feasible_fraction = 1`, not a reduction target).
 - **N-1 gate**: `scenarioStale` (active nomination ≠ last validated `scenario_id`), including before the first run. Dirty **banners** use `scenarioDirty` (false until a run exists).
 - **Pressure diagnostics** are post-hoc envelope checks on the converged result (except capacity study and N-1, which use `network_with_scenario_boundaries_for_nova`).
-- **IPOPT escalation** is never the default; enable via `GAZFLOW_NOVA_IPOPT_ESCALATION` (`on`, `on-notsolved`, `maybe` ≡ `on-notsolved`). Requires feature `nlp-ipopt`. Local scaled-pressure restarts on `NotSolvedLocal`: `GAZFLOW_NOVA_LOCAL_RESTARTS` (default **2**).
+- **IPOPT (chercheur NoVa in-repo)** : avec le feature `nlp-ipopt` (image Docker back), l'escalade est **on-notsolved** par défaut. Newton d'abord ; si `NotSolvedLocal`, IPOPT cherche un point sur le **même modèle** que le solveur (`evaluate_state`). Désactiver : `GAZFLOW_NOVA_IPOPT_ESCALATION=off`. Le verdict compact (HTTP / Workproba) n'embarque pas les cartes P/Q ; l'UI les lit via `GET /api/nova/runs/{id}/state`, `POST .../apply`, le WS, ou `?run=`. Redémarrages locaux (pressions scalées) : `GAZFLOW_NOVA_LOCAL_RESTARTS` (défaut **2**).
+- **Dataset isolé** : `dataset_id` optionnel sur validate / capacité / compare / N-1 / batch / liste des nominations, **sans** changer le réseau actif de l'UI. `POST /api/network` reste l'action explicite de Camille / `select_network`.
+- **Runs NoVa** : chaque validation HTTP ou WS enregistre un `run_id` (registre borné). Workproba relit le compact ; la carte hydrate l'état nodal.
 - **Reduced nomination** (`POST /api/nova/nominations/reduced`): mass-balance entries at fixed flow; not a substitute for certification without re-validation.
-- **GasLib-582 `mild_618`**: feasible with external IPOPT NLP; the in-repo Newton solver may return `NotSolvedLocal`. Do not treat a local `NotSolvedLocal` as a UI bug or fake a feasible verdict.
+- **GasLib-582 `mild_618`**: feasible with IPOPT on the in-repo NLP (`nlp-ipopt`) and with the independent external Pyomo model. The Newton local solver may still return `NotSolvedLocal` before escalation. Do not treat a local `NotSolvedLocal` without an IPOPT point as a UI bug or fake a feasible verdict.
 - **No systematic `.sol` validation** against external reference solutions.
 
 ## 3. Data and validation limits
 
 - GasLib-11 pressure validation: max relative error < 5 % (`test_gaslib_11_vs_reference_solution`).
 - GasLib-135 (135 nodes): recommended transport demo with continuation preset; steady-state smoke test passes (faer LU stable with component anchoring on fragmented subgraphs).
-- GasLib-582 (582 nodes): `nomination_mild_618` is **feasible** (proven constructively in Phase VIII-bis by an independent external IPOPT NLP solve — see §3.1 below and [diagnosis](../testing/gaslib-582-compressor-diagnosis.md)). Earlier phases concluded "topological infeasibility" for sink_88/83/108; a zero-demand reachability probe (single anchor source_14 at 86 bar) shows these sinks reach ~86 bar at zero flow, far above their contractual floors (26/21/16 bar). The earlier "capacity = 0 even at zero flow" was an artifact of multiple conflicting pressure anchors (slack 51 bar + sources 70-121 bar + non-convergence), not a real topological infeasibility. The in-repo local Newton solver still reports `NotSolvedLocal` under the full nomination flow because the NoVa NLP is non-convex and the penalty-Newton is weaker than IPOPT (which finds the feasible point reliably when single-threaded); this is a local-solver weakness, not evidence against feasibility.
+- GasLib-582 (582 nodes): `nomination_mild_618` is **feasible** (proven constructively in Phase VIII-bis by an independent external IPOPT NLP solve — see §3.1 below and [diagnosis](../testing/gaslib-582-compressor-diagnosis.md)). Earlier phases concluded "topological infeasibility" for sink_88/83/108; a zero-demand reachability probe (single anchor source_14 at 86 bar) shows these sinks reach ~86 bar at zero flow, far above their contractual floors (26/21/16 bar). The earlier "capacity = 0 even at zero flow" was an artifact of multiple conflicting pressure anchors (slack 51 bar + sources 70-121 bar + non-convergence), not a real topological infeasibility. The in-repo local Newton solver still reports `NotSolvedLocal` under the full nomination flow because the NoVa NLP is non-convex and the penalty-Newton is weaker than IPOPT. The product path then asks IPOPT on the **same** in-repo model (`nlp-ipopt`, `OMP_NUM_THREADS=1`). A Newton miss without an IPOPT point is a local-solver weakness, not evidence against feasibility.
 - Flow comparison against external `.sol` references: not yet systematic. **GasLib-11 ZIP (ZIB)** does not ship a `.sol` file ; oracle externe indisponible pour ce réseau (voir `docs/testing/gaslib-11-quarantine.md`).
 - PDE transient: monotonicity on single pipe; Y-tree / cycles / regulator; adaptive_dt; **optional external nodal IC** (`initial_pressures` on API/WS) ; optional **`picard_relax`** on API/WS ∈ (0, 1] (défaut solveur 0,35) ; **CI spatiale conduites** (`initial_pipe_states` / TRR154 `edgedata`) = Rust/corpus only (HTTP passe `None`) ; **TRR154 GasLib-11** :
   - IC from `.state` (`test_trr154_gaslib11_pde_ic_from_state`) : CI nodale libre + **CI spatiale** conduites (profils P/ṁ `edgedata`) + **projection** sorties CS sur ratios catalogue GazFlow (préserver la CI brute CS ou caler r sur TRR154 → Picard instable) ; t=0 match strict hors CS, tolérante sur N01/N05 ;
@@ -112,9 +114,10 @@ The NoVa NLP is genuinely **non-convex**: from a naive uniform start, multithrea
 reaches the feasible point only ~20% of runs (others stop at non-feasible local minima of the
 Phase-1 slack objective); pinning `OMP_NUM_THREADS=1` makes IPOPT reach it reliably (5/5).
 This is the phenomenon ZIB reports for local solvers on hard NoVa instances and the reason
-GazFlow's weaker penalty-Newton reports `NotSolvedLocal`. The feasibility itself is settled;
-the remaining engineering work is to make the in-repo local solver's non-convex convergence
-match the external one (multistart, continuation, or SQP/IPOPT backend).
+GazFlow's weaker penalty-Newton reports `NotSolvedLocal` from a cold start. The product path
+then escalates to **IPOPT on the in-repo NLP** (`feature nlp-ipopt`, default
+`GAZFLOW_NOVA_IPOPT_ESCALATION=on-notsolved` in the Docker back image). The independent
+Pyomo/IPOPT model (ρ_eff=50) remains a separate constructive proof, not the same model.
 
 ## 4. Impact on usage
 
@@ -126,17 +129,13 @@ match the external one (multistart, continuation, or SQP/IPOPT backend).
 
 - Full acoustic / Saint-Venant PDE; tighter cyclic residuals on pathological loops; thermal transients.
 - Cv ISA gas choking in Newton; analytic regulator Jacobian.
-- NoVa local Newton parity with IPOPT on GasLib-582 `mild_618` without external warm-start (non-convex NLP).
 - Thermal profiles in pipes (soil coupling).
 - Outer-loop Re–Q in Newton Jacobian for sub-1 % accuracy.
 - Systematic external reference validation (pressure and flow).
 - Export edited network as GeoJSON/CSV from UI.
-- **NoVa feasibility** (Phase VIII + VIII-bis): the bounded local feasibility search
-  (`GAZFLOW_NOVA_FEASIBILITY=1`, `equations.md` §4.8) reports `NotSolvedLocal` on `mild_618`.
-  Feasibility of `mild_618` is nonetheless **proven** by an independent external IPOPT NLP
-  solve (`scripts/nova/nova_pyomo.py` + `scripts/nova/Dockerfile`), which exhibits a feasible
-  point under the full nomination. The NoVa NLP is non-convex; remaining work is to bring the
-  in-repo local solver's non-convex convergence to the external one (multistart, continuation,
-  or an SQP/IPOPT backend) so the local verdict matches. A global solver (Couenne/BARON) is
-  no longer needed for `mild_618` (feasibility is settled) but remains the tool to prove
-  infeasibility of other nominations.
+- **NoVa feasibility** (Phase VIII + VIII-bis + in-repo IPOPT): Newton still reports
+  `NotSolvedLocal` on `mild_618` from a cold start. The product path escalates to IPOPT on
+  the in-repo NLP (`nlp-ipopt`). Feasibility is also proven by the independent Pyomo/IPOPT
+  model (`scripts/nova/nova_pyomo.py`). Remaining work is Newton robustness (parity without
+  escalation) and a global solver (Couenne/BARON) to **prove infeasibility** of other
+  nominations. A global solver is no longer needed to settle `mild_618`.

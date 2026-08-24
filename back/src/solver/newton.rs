@@ -2929,6 +2929,60 @@ pub(crate) fn pressure_nlp_eval(
     Ok(PressureNlpEval { g, jac_val, residual_inf })
 }
 
+/// Reconstruit pressions + débits de conduites depuis un champ nodal, via le même
+/// `evaluate_state` que l'oracle NLP (ρ dynamique, gravité, ShortPipe, couplage
+/// compresseur cuit). Sert à publier un point IPOPT dans l'UI sans garder l'état Newton.
+pub(crate) fn solver_result_from_pressures(
+    network: &GasNetwork,
+    demands: &HashMap<String, f64>,
+    gas_composition: GasComposition,
+    pressures_bar: &HashMap<String, f64>,
+    iterations: usize,
+) -> Result<crate::solver::steady_state::SolverResult> {
+    let s = build_nlp_setup(network, demands)?;
+    let n = s.node_ids.len();
+    let mut pressures_sq = vec![70.0_f64.powi(2); n];
+    for (&idx, &p_sq) in &s.fixed {
+        pressures_sq[idx] = p_sq;
+    }
+    for (i, id) in s.node_ids.iter().enumerate() {
+        if let Some(&p) = pressures_bar.get(id)
+            && p.is_finite()
+            && p > 0.0
+        {
+            pressures_sq[i] = p * p;
+        }
+    }
+    s.alias.sync_pressures(&mut pressures_sq);
+
+    let state = evaluate_state(
+        &s.pipes,
+        &s.demands_vec,
+        &pressures_sq,
+        &s.free_indices,
+        s.scaling,
+        gas_composition,
+        None,
+        None,
+    );
+
+    let mut pressures = HashMap::with_capacity(n);
+    for (i, id) in s.node_ids.iter().enumerate() {
+        pressures.insert(id.clone(), pressures_sq[i].max(0.0).sqrt());
+    }
+    let mut flows = HashMap::with_capacity(s.pipes.len());
+    for (pipe_idx, pipe) in s.pipes.iter().enumerate() {
+        flows.insert(pipe.id.clone(), state.flows[pipe_idx]);
+    }
+
+    Ok(crate::solver::steady_state::SolverResult::from_core(
+        pressures,
+        flows,
+        iterations,
+        state.residual,
+    ))
+}
+
 /// Recalcule le résidu de bilan massique (max |g_i| aux nœuds libres) à partir des
 /// pressions résolues, indépendamment du résidu Newton mémorisé dans [`SolverResult`].
 #[cfg(test)]

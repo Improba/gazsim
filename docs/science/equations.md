@@ -480,8 +480,7 @@ all marginal sinks in contract bounds). This is a constructive proof of feasibil
 global solver is needed for `mild_618`. The NLP is non-convex: multithreaded IPOPT reaches
 the feasible point only ~20% of runs from a naive start (others stop at non-feasible local
 minima of the Phase-1 slack objective); pinning `OMP_NUM_THREADS=1` makes it reliable (5/5).
-The in-repo bounded local solver reports `NotSolvedLocal` on `mild_618` — a local-solver
-weakness on a non-convex NLP, not evidence against feasibility.
+The in-repo bounded local Newton still reports `NotSolvedLocal` on `mild_618` from a cold start. The product path then asks **IPOPT on the same in-repo NLP** (`feature nlp-ipopt`, default `GAZFLOW_NOVA_IPOPT_ESCALATION=on-notsolved`) and publishes that point when found. An independent Pyomo/IPOPT model (ρ_eff=50) also exhibits a feasible point — see below. A Newton `NotSolvedLocal` without an IPOPT point is a local-solver weakness, not evidence against feasibility.
 
 **Implementation:** `solver/newton.rs` (`PressureBoundContext::from_network_nova`),
 `gaslib/scenario.rs` (`nova_feasibility_enabled`, entry-anchor bypass),

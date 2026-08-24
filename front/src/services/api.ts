@@ -155,6 +155,61 @@ export interface NovaVerdict {
   solver_signature?: NovaSolverSignature;
 }
 
+export interface NovaRunSummary {
+  run_id: string;
+  dataset_id: string;
+  scenario_id: string | null;
+  kind: string;
+  created_ms: number;
+  feasible: boolean | null;
+  cause: string | null;
+  solver_signature: string | null;
+  solver_established: boolean | null;
+}
+
+export interface NovaRunCompact {
+  run_id: string;
+  dataset_id: string;
+  scenario_id: string | null;
+  kind: string;
+  feasible: boolean | null;
+  cause: string | null;
+  deficit_sinks: string[];
+  solver_signature: string | null;
+  solver_established: boolean | null;
+  demand_scale_achieved?: number | null;
+  min_pressure_bar: number;
+  max_pressure_bar: number;
+  worst_shortfall_bar: number;
+  worst_sink: string | null;
+  deficit_details: {
+    node_id: string;
+    solved_pressure_bar: number;
+    required_lower_bar: number | null;
+    shortfall_bar: number;
+  }[];
+  limitations: string[];
+}
+
+export interface NovaRunState {
+  run_id: string;
+  dataset_id: string;
+  scenario_id: string | null;
+  kind: string;
+  demands: Record<string, number>;
+  pressures: Record<string, number>;
+  flows: Record<string, number>;
+  iterations: number;
+  residual: number;
+  warnings: string[];
+  demand_scale_achieved?: number | null;
+  pressure_slips: ScenarioPressureSlip[];
+  pressure_margins: ScenarioPressureMargin[];
+  boundary_supply: BoundaryPressureSupplyReport[];
+  sink_diagnostics: SinkDiagnostic[];
+  nova_verdict: NovaVerdict | null;
+}
+
 export interface NovaScenarioSummary {
   id: string;
   filename: string;
@@ -200,6 +255,7 @@ export interface NovaCapacityRequest {
   bisection_steps?: number;
   robust_mode?: boolean;
   max_iter?: number;
+  dataset_id?: string;
 }
 
 export interface NominationSolveOutcome {
@@ -220,6 +276,7 @@ export interface CompareNominationsRequest {
   robust_mode?: boolean;
   max_iter?: number;
   tolerance?: number;
+  dataset_id?: string;
 }
 
 export interface CompareNominationsResponse {
@@ -360,6 +417,7 @@ export interface ContingencyRequest {
   /** Identifiant de nomination NoVa — charge les demandes du scénario sans modifier la topologie. */
   scenario_id?: string;
   custom_cases?: ContingencyCase[];
+  dataset_id?: string;
 }
 
 export interface ImportPreviewNodeDto {
@@ -772,8 +830,10 @@ export const api = {
     return data;
   },
 
-  async listNovaScenarios(): Promise<NovaScenarioSummary[]> {
-    const { data } = await client.get<NovaScenarioSummary[]>('/nova/scenarios');
+  async listNovaScenarios(datasetId?: string): Promise<NovaScenarioSummary[]> {
+    const { data } = await client.get<NovaScenarioSummary[]>('/nova/scenarios', {
+      params: datasetId ? { dataset_id: datasetId } : undefined,
+    });
     return data;
   },
 
@@ -802,6 +862,30 @@ export const api = {
 
   async deleteNovaNomination(id: string): Promise<void> {
     await client.delete(`/nova/nominations/${encodeURIComponent(id)}`);
+  },
+
+  async listNovaRuns(): Promise<NovaRunSummary[]> {
+    const { data } = await client.get<NovaRunSummary[]>('/nova/runs');
+    return data;
+  },
+
+  async getNovaRun(id: string): Promise<NovaRunCompact> {
+    const { data } = await client.get<NovaRunCompact>(`/nova/runs/${encodeURIComponent(id)}`);
+    return data;
+  },
+
+  async getNovaRunState(id: string): Promise<NovaRunState> {
+    const { data } = await client.get<NovaRunState>(
+      `/nova/runs/${encodeURIComponent(id)}/state`,
+    );
+    return data;
+  },
+
+  async applyNovaRun(id: string): Promise<NovaRunState> {
+    const { data } = await client.post<NovaRunState>(
+      `/nova/runs/${encodeURIComponent(id)}/apply`,
+    );
+    return data;
   },
 
   async compareNovaNominations(

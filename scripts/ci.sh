@@ -37,6 +37,10 @@ echo "--- [4/8] Rust : cargo test ---"
 docker compose run --rm back cargo test
 
 echo ""
+echo "--- [4b/8] Rust : cargo test --features nlp-ipopt ---"
+docker compose run --rm -e OMP_NUM_THREADS=1 back cargo test --features nlp-ipopt
+
+echo ""
 echo "--- [5/8] Frontend : npm install ---"
 docker compose run --rm front npm install
 

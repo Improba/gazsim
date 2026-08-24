@@ -2238,6 +2238,24 @@ mod tests {
             "oracle mass residual should vanish at the solver solution, got {}",
             eval.residual_inf
         );
+        let rebuilt = crate::solver::newton::solver_result_from_pressures(
+            &net,
+            &demands,
+            gas,
+            &result.pressures,
+            result.iterations,
+        )
+        .expect("rebuild from pressures");
+        let q_pipe = rebuilt.flows.values().next().copied().unwrap_or(0.0);
+        let q_orig = result.flows.values().next().copied().unwrap_or(0.0);
+        assert!(
+            (q_pipe - q_orig).abs() < 1e-3,
+            "rebuilt flow {q_pipe} should match solver flow {q_orig}"
+        );
+        assert!(
+            (rebuilt.pressures["sink"] - result.pressures["sink"]).abs() < 1e-6,
+            "rebuilt sink pressure should match"
+        );
         assert!(
             eval.jac_val.iter().all(|v| v.is_finite()),
             "Jacobian values must be finite"

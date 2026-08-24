@@ -28,6 +28,29 @@ const apiSpies = vi.hoisted(() => ({
     mode,
   })),
   getCompressorOperatingPoints: vi.fn(async () => ({ points: [] })),
+  applyNovaRun: vi.fn(async () => ({
+    run_id: 'run-wp-1',
+    dataset_id: 'test',
+    scenario_id: 'nom',
+    kind: 'validate',
+    demands: { exit01: -1 },
+    pressures: { entry01: 70, exit01: 40 },
+    flows: { p1: 10 },
+    iterations: 12,
+    residual: 1e-4,
+    warnings: ['Point établi par IPOPT (modèle in-repo).'],
+    demand_scale_achieved: 1,
+    pressure_slips: [],
+    pressure_margins: [],
+    boundary_supply: [],
+    sink_diagnostics: [],
+    nova_verdict: {
+      feasible: true,
+      deficit_sinks: [],
+      cause: 'Feasible',
+      solver_signature: 'IpoptEscalation',
+    },
+  })),
 }));
 
 const notifySpy = vi.hoisted(() => vi.fn());
@@ -45,6 +68,7 @@ const networkStoreMock = vi.hoisted(() => ({
   gas: {
     composition: { ch4: 0.97, c2h6: 0.01, co2: 0.01, n2: 0.01, h2: 0 },
   },
+  fetchNetwork: vi.fn(async () => {}),
 }));
 
 vi.mock('src/services/ws', () => ({
@@ -62,6 +86,7 @@ vi.mock('src/services/api', () => ({
     getCompressorMapMode: apiSpies.getCompressorMapMode,
     setCompressorMapMode: apiSpies.setCompressorMapMode,
     getCompressorOperatingPoints: apiSpies.getCompressorOperatingPoints,
+    applyNovaRun: apiSpies.applyNovaRun,
   },
 }));
 
@@ -81,6 +106,8 @@ describe('useSimulateStore', () => {
     wsSpies.cancelSimulation.mockClear();
     apiSpies.exportSimulation.mockClear();
     apiSpies.runNovaCapacity.mockClear();
+    apiSpies.applyNovaRun.mockClear();
+    networkStoreMock.fetchNetwork.mockClear();
     notifySpy.mockClear();
   });
 
@@ -487,5 +514,22 @@ describe('useSimulateStore', () => {
     await store.runSimulation(undefined, { scenario_id: 'other_scn' });
 
     expect(store.sinkCapacity).toEqual([]);
+  });
+
+  it('hydrates the map from a nova run without starting a websocket', async () => {
+    const store = useSimulateStore();
+    const nominationStore = useNominationStore();
+
+    await store.hydrateFromNovaRun('run-wp-1');
+
+    expect(apiSpies.applyNovaRun).toHaveBeenCalledWith('run-wp-1');
+    expect(networkStoreMock.fetchNetwork).toHaveBeenCalledTimes(1);
+    expect(wsSpies.startSimulation).not.toHaveBeenCalled();
+    expect(store.currentRunId).toBe('run-wp-1');
+    expect(store.status).toBe('converged');
+    expect(store.result?.pressures.exit01).toBe(40);
+    expect(store.novaVerdict?.solver_signature).toBe('IpoptEscalation');
+    expect(nominationStore.activeId).toBe('nom');
+    expect(store.lastRunScenarioId).toBe('nom');
   });
 });

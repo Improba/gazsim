@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import { Notify } from 'quasar';
-import { api, type SimulationResult, type CapacityViolation, type EquipmentState, type PipeEquipmentDto, type ScenarioPressureSlip, type ScenarioPressureMargin, type BoundaryPressureSupplyReport, type SinkDiagnostic, type NovaVerdict, type SinkCapacityReport, type CompressorMapMode, type CompressorOperatingPoint } from 'src/services/api';
+import { api, type SimulationResult, type CapacityViolation, type EquipmentState, type PipeEquipmentDto, type ScenarioPressureSlip, type ScenarioPressureMargin, type BoundaryPressureSupplyReport, type SinkDiagnostic, type NovaVerdict, type SinkCapacityReport, type CompressorMapMode, type CompressorOperatingPoint, type NovaRunState } from 'src/services/api';
 import {
   SimulationWsClient,
   mergeConvergedMessage,
@@ -621,6 +621,57 @@ export const useSimulateStore = defineStore('simulate', () => {
     simulationMode.value = 'free';
   }
 
+  function applyNovaRunState(applied: NovaRunState) {
+    const nominationStore = useNominationStore();
+    if (applied.scenario_id) {
+      nominationStore.selectById(applied.scenario_id);
+    }
+    demandOverrides.value = { ...applied.demands };
+    lastRunParams.value = { demands: { ...applied.demands } };
+    lastRunScenarioId.value = applied.scenario_id;
+    activeScenarioId.value = applied.scenario_id;
+    currentRunId.value = applied.run_id;
+    status.value = 'converged';
+    loading.value = false;
+    errorMessage.value = null;
+    iteration.value = applied.iterations;
+    residual.value = applied.residual;
+    warnings.value = applied.warnings ?? [];
+    pressureSlips.value = applied.pressure_slips ?? [];
+    pressureMargins.value = applied.pressure_margins ?? [];
+    boundarySupply.value = applied.boundary_supply ?? [];
+    sinkDiagnostics.value = applied.sink_diagnostics ?? [];
+    novaVerdict.value = applied.nova_verdict ?? null;
+    livePressures.value = { ...applied.pressures };
+    liveFlows.value = { ...applied.flows };
+    result.value = {
+      pressures: { ...applied.pressures },
+      flows: { ...applied.flows },
+      iterations: applied.iterations,
+      residual: applied.residual,
+      warnings: applied.warnings,
+      demand_scale_achieved: applied.demand_scale_achieved ?? undefined,
+      pressure_slips: applied.pressure_slips,
+      pressure_margins: applied.pressure_margins,
+      boundary_supply: applied.boundary_supply,
+      sink_diagnostics: applied.sink_diagnostics,
+      nova_verdict: applied.nova_verdict ?? undefined,
+    };
+    addLog(`run ${applied.run_id} chargé`);
+  }
+
+  async function hydrateFromNovaRun(runId: string): Promise<void> {
+    const trimmed = runId.trim();
+    if (!trimmed) {
+      return;
+    }
+    const networkStore = useNetworkStore();
+    const applied = await api.applyNovaRun(trimmed);
+    await networkStore.fetchNetwork();
+    applyNovaRunState(applied);
+    void loadCompressorOperatingPoints();
+  }
+
   async function exportResult(format: 'json' | 'csv' | 'zip' | 'xlsx') {
     if (!currentRunId.value || status.value !== 'converged') {
       return;
@@ -709,6 +760,7 @@ export const useSimulateStore = defineStore('simulate', () => {
     setPreviewStep,
     cancelSimulation,
     resetSimulation,
+    hydrateFromNovaRun,
     exportResult,
   };
 });

@@ -157,6 +157,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
+import { Notify } from 'quasar';
 import { useNetworkStore } from 'src/stores/network';
 import { useNominationStore } from 'src/stores/nomination';
 import { useContingencyStore } from 'src/stores/contingency';
@@ -237,7 +238,23 @@ function syncHeaderHeight(): void {
 }
 
 onMounted(() => {
-  void networkStore.bootstrap();
+  void (async () => {
+    await networkStore.bootstrap();
+    const raw = route.query.run;
+    const runId = typeof raw === 'string' ? raw.trim() : '';
+    if (!runId) {
+      return;
+    }
+    try {
+      await simulateStore.hydrateFromNovaRun(runId);
+    } catch (err) {
+      console.error(err);
+      Notify.create({
+        type: 'negative',
+        message: 'Impossible de charger le run GazFlow demandé.',
+      });
+    }
+  })();
   syncHeaderHeight();
   const el = resolveHeaderEl();
   if (el && typeof ResizeObserver !== 'undefined') {

@@ -2,18 +2,21 @@
   <div
     class="viewer-root"
     :class="{ 'viewer-root--edit-mode': editorStore.editMode }"
+    :data-camera-height="Math.round(cameraHeightM)"
   >
     <div ref="canvasArea" class="canvas-area">
       <div ref="cesiumContainer" class="canvas-element cesium-container" />
-      <div v-if="positioningWarningVisible" class="positioning-warning">
+      <div v-if="positioningWarningVisible" class="positioning-warning" aria-label="Positionnement cartographique approximatif">
         <q-icon name="warning_amber" color="warning" size="18px" />
-        <span>{{ positioningWarningTitle }}</span>
-        <q-icon name="help_outline" size="16px" />
         <q-tooltip anchor="bottom left" self="top left" class="bg-grey-10 text-white">
-          <div class="positioning-warning-tooltip">{{ positioningWarningDetail }}</div>
+          <div class="positioning-warning-tooltip">
+            <div class="text-weight-medium q-mb-xs">{{ positioningWarningTitle }}</div>
+            {{ positioningWarningDetail }}
+          </div>
         </q-tooltip>
       </div>
       <q-btn
+        v-if="showPerfToggle"
         dense
         round
         icon="speed"
@@ -70,12 +73,21 @@ import {
   defined,
   Cartographic,
   Math as CesiumMath,
+  Rectangle,
 } from 'cesium';
+import { cameraRectangleForNodes, nodeLonLat, schematicKmPerUnit, type GeoRectangle } from 'src/utils/mapCamera';
 import { useNetworkStore } from 'src/stores/network';
 import { useSimulateStore } from 'src/stores/simulate';
 import { useTimeseriesStore } from 'src/stores/timeseries';
 import { useEditorStore } from 'src/stores/editor';
 import { pressureRange, pressureToCss } from 'src/utils/pressureColor';
+import {
+  UNCONSTRAINED_NODE_CSS,
+  contractMarginForNode,
+  contractMarginToCss,
+  hasContractMarginScale,
+} from 'src/utils/contractMarginColor';
+import { deficitSinkIds } from 'src/utils/novaDeficitSinks';
 import { escapeHtml } from 'src/utils/escapeHtml';
 import {
   equipmentKindLabel,
@@ -88,6 +100,7 @@ import {
   nodePointPixelSize,
   nodePointVisible,
   nodeStride,
+  SMALL_NETWORK_LABEL_MAX_HEIGHT,
 } from 'src/utils/mapLod';
 import type { PipeDto } from 'src/stores/network';
 
@@ -101,6 +114,12 @@ const nodeEntitiesById = new Map<string, Entity>();
 const pipeEntitiesById = new Map<string, Entity>();
 const pipePolylinesById = new Map<string, { material: Color } | any>();
 const equipmentEntitiesById = new Map<string, Entity>();
+/**
+ * Dernière couleur « résultat » appliquée par conduite. La passe de sélection repasse
+ * sur toutes les conduites : sans ce relais elle réécrirait la couleur de type et le
+ * réseau perdrait sa coloration débit au premier clic sur la carte.
+ */
+const pipeResultColorById = new Map<string, Color>();
 
 const networkStore = useNetworkStore();
 const simulateStore = useSimulateStore();
@@ -108,7 +127,11 @@ const timeseriesStore = useTimeseriesStore();
 const editorStore = useEditorStore();
 const selectedStep = computed(() => timeseriesStore.selectedStep);
 const debugOverlayEnabled = ref(false);
+const showPerfToggle = computed(
+  () => editorStore.editMode || debugOverlayEnabled.value,
+);
 const fps = ref(0);
+const cameraHeightM = ref(0);
 const renderUpdateMs = ref(0);
 const entityCount = ref(0);
 const positioningWarningVisible = ref(false);
@@ -116,6 +139,7 @@ const positioningWarningTitle = ref('Positionnement cartographique approximatif'
 const positioningWarningDetail = ref('');
 const canvasArea = ref<HTMLElement>();
 let resizeObserver: ResizeObserver | null = null;
+let frameRetryTimers: ReturnType<typeof setTimeout>[] = [];
 let editClickHandler: ScreenSpaceEventHandler | null = null;
 let onKeyDown: ((event: KeyboardEvent) => void) | null = null;
 const PRIMITIVE_PIPE_THRESHOLD = 200;
@@ -179,13 +203,13 @@ function addEquipmentMarker(pipe: PipeDto, lon: number, lat: number) {
   if (!viewer || !isEquipmentKind(pipe.kind)) return;
   const entity = viewer.entities.add({
     id: `equip:${pipe.id}`,
-    position: Cartesian3.fromDegrees(lon, lat, 0),
+    position: Cartesian3.fromDegrees(lon, lat, 80),
     point: {
       pixelSize: 12,
       color: pipeLineColor(pipe.kind),
       outlineColor: Color.WHITE,
       outlineWidth: 2,
-      heightReference: HeightReference.CLAMP_TO_GROUND,
+      heightReference: HeightReference.NONE,
     },
     label: {
       text: equipmentKindLabel(pipe.kind).split(' ')[0] ?? pipe.kind,
@@ -223,8 +247,8 @@ onMounted(async () => {
     sceneModePicker: false,
     navigationHelpButton: false,
     fullscreenButton: false,
-    infoBox: true,
-    selectionIndicator: true,
+    infoBox: false,
+    selectionIndicator: false,
     imageryProvider: false,
     skyBox: false,
     contextOptions: {
@@ -339,10 +363,13 @@ function handleViewModeNodePick(screenPosition: Cartesian2) {
   if (entityId.startsWith('node:')) {
     editorStore.selectNode(entityId.slice(5));
     updateSelectionHighlight();
-  } else {
-    editorStore.clearSelection();
-    updateSelectionHighlight();
+    return;
   }
+  if (simulateStore.novaActive && entityId) {
+    return;
+  }
+  editorStore.clearSelection();
+  updateSelectionHighlight();
 }
 
 async function handleMapClick(screenPosition: Cartesian2) {
@@ -403,9 +430,10 @@ function updateSelectionHighlight() {
   for (const [pipeId, entity] of pipeEntitiesById.entries()) {
     if (!entity.polyline) continue;
     const selected = editorStore.selectedKind === 'pipe' && editorStore.selectedId === pipeId;
-    const baseColor = selected ? SELECTED_PIPE_GLOW : pipeLineColor(
-      networkStore.pipes.find((pipe) => pipe.id === pipeId)?.kind ?? 'pipe',
-    );
+    const baseColor = selected
+      ? SELECTED_PIPE_GLOW
+      : (pipeResultColorById.get(pipeId) ??
+        pipeLineColor(networkStore.pipes.find((pipe) => pipe.id === pipeId)?.kind ?? 'pipe'));
     entity.polyline.width = selected ? 6 : Math.max(
       2,
       (networkStore.pipes.find((pipe) => pipe.id === pipeId)?.diameter_mm ?? 100) / 100,
@@ -424,6 +452,7 @@ onBeforeUnmount(() => {
   teardownEditInteractions();
   resizeObserver?.disconnect();
   resizeObserver = null;
+  clearFrameRetries();
   if (viewer && postRenderCb) {
     viewer.scene.postRender.removeEventListener(postRenderCb);
   }
@@ -436,6 +465,7 @@ onBeforeUnmount(() => {
   pipeEntitiesById.clear();
   pipePolylinesById.clear();
   equipmentEntitiesById.clear();
+  pipeResultColorById.clear();
   postRenderCb = null;
   cameraChangedCb = null;
   viewer?.destroy();
@@ -471,7 +501,7 @@ watch(
 );
 
 watch(
-  () => simulateStore.pressureSlips,
+  () => [simulateStore.pressureMargins, simulateStore.pressureSlips, simulateStore.novaActive, simulateStore.nominationChangedSinceLastRun],
   () => {
     updateColors();
   },
@@ -511,14 +541,7 @@ watch(
     }
     // Mode visualisation (Camille) : vole vers le nœud sélectionné pour qu'il reste
     // visible sur les grands réseaux (ex. GasLib-582). En édition on ne perturbe pas la caméra.
-    if (viewer && !editorStore.editMode && editorStore.selectedKind === 'node' && editorStore.selectedId) {
-      const entity = nodeEntitiesById.get(editorStore.selectedId);
-      if (entity) {
-        void viewer.flyTo(entity, { duration: 0.6 }).catch(() => {
-          // flyTo peut rejeter si l'entité n'est pas rendable — on ignore silencieusement.
-        });
-      }
-    }
+    flyToSelectedNode();
   },
 );
 
@@ -567,6 +590,7 @@ function renderNetwork() {
     pipeEntitiesById.clear();
     pipePolylinesById.clear();
     equipmentEntitiesById.clear();
+    pipeResultColorById.clear();
 
     const nodeById = new Map(nodes.map((n) => [n.id, n] as const));
     const neighborsByNode = new Map<string, Set<string>>();
@@ -579,20 +603,8 @@ function renderNetwork() {
 
     // Projection par défaut si pas de GPS (GasLib-11)
     // On centre sur l'Allemagne (50N, 10E) et on considère x,y en km
-    const REF_LAT = 50.0;
-    const REF_LON = 10.0;
-    const KM_PER_DEG_LAT = 111.0;
-    const KM_PER_DEG_LON = 111.0 * Math.cos((REF_LAT * Math.PI) / 180);
-
-    const getPos = (n: (typeof nodes)[0]) => {
-      if (n.lon != null && n.lat != null) {
-        return { lon: n.lon, lat: n.lat };
-      }
-      return {
-        lon: REF_LON + n.x / KM_PER_DEG_LON,
-        lat: REF_LAT + n.y / KM_PER_DEG_LAT,
-      };
-    };
+    const kmPerUnit = schematicKmPerUnit(nodes);
+    const getPos = (n: (typeof nodes)[0]) => nodeLonLat(n, kmPerUnit);
 
     for (const node of nodes) {
       const pos = getPos(node);
@@ -600,11 +612,11 @@ function renderNetwork() {
       const neighborsText = neighbors.length > 0 ? neighbors.join(', ') : 'Aucun';
       const entity = viewer.entities.add({
         id: `node:${node.id}`,
-        position: Cartesian3.fromDegrees(pos.lon, pos.lat, node.height_m),
+        position: Cartesian3.fromDegrees(pos.lon, pos.lat, Math.max(node.height_m, 80)),
         point: {
           pixelSize: 8,
           color: Color.CYAN,
-          heightReference: HeightReference.CLAMP_TO_GROUND,
+          heightReference: HeightReference.NONE,
         },
         label: {
           text: node.id,
@@ -656,7 +668,7 @@ function renderNetwork() {
               glowPower: 0.2,
               color: pipeLineColor(pipe.kind ?? 'pipe'),
             }),
-            clampToGround: true,
+            clampToGround: false,
           },
           description: buildPipeDescription(pipe),
         });
@@ -665,7 +677,7 @@ function renderNetwork() {
       }
     }
 
-  viewer.zoomTo(viewer.entities);
+  frameCamera();
   entityCount.value = viewer.entities.values.length;
   updateNodeLod();
   updateEquipmentStateLabels();
@@ -673,37 +685,118 @@ function renderNetwork() {
   updateSelectionHighlight();
 }
 
+function cesiumRectangle(rect: GeoRectangle): Rectangle {
+  return Rectangle.fromDegrees(rect.west, rect.south, rect.east, rect.north);
+}
+
+function currentCameraRect(): GeoRectangle | null {
+  let focus = null;
+  if (editorStore.selectedKind === 'node' && editorStore.selectedId) {
+    const node = networkStore.nodes.find((item) => item.id === editorStore.selectedId);
+    if (node) {
+      focus = nodeLonLat(node, schematicKmPerUnit(networkStore.nodes));
+    }
+  }
+  return cameraRectangleForNodes(networkStore.nodes, focus);
+}
+
+function applyCameraRectangle(rect: GeoRectangle, duration: number): void {
+  if (!viewer) return;
+  const destination = cesiumRectangle(rect);
+  if (duration <= 0) {
+    viewer.camera.setView({ destination });
+  } else {
+    viewer.camera.flyTo({ destination, duration });
+  }
+  viewer.scene.requestRender();
+}
+
+function clearFrameRetries(): void {
+  for (const timer of frameRetryTimers) {
+    window.clearTimeout(timer);
+  }
+  frameRetryTimers = [];
+}
+
+function frameNetwork(duration = 0, withRetries = false): void {
+  const rect = currentCameraRect();
+  if (!rect) return;
+  applyCameraRectangle(rect, duration);
+  if (!withRetries) return;
+  clearFrameRetries();
+  // Cesium réapplique parfois la vue globe au premier rendu : recadrer après coup.
+  frameRetryTimers = [
+    window.setTimeout(() => {
+      const next = currentCameraRect();
+      if (next) applyCameraRectangle(next, 0);
+    }, 120),
+    window.setTimeout(() => {
+      const next = currentCameraRect();
+      if (next) applyCameraRectangle(next, 0);
+    }, 500),
+  ];
+}
+
+function flyToSelectedNode(): void {
+  if (!viewer || editorStore.editMode) return;
+  if (editorStore.selectedKind !== 'node' || !editorStore.selectedId) return;
+  const rect = currentCameraRect();
+  if (!rect) return;
+  applyCameraRectangle(rect, 0.7);
+}
+
+function frameCamera(): void {
+  frameNetwork(0, true);
+}
+
 function updateColors() {
   if (!viewer) return;
   const startedAt = performance.now();
+  const staleNomination = simulateStore.nominationChangedSinceLastRun;
 
   const step = timeseriesStore.selectedStep;
   const preview = simulateStore.previewStep;
-  const pressures =
-    preview?.pressures ??
-    step?.pressures ??
-    (Object.keys(simulateStore.livePressures).length > 0
-      ? simulateStore.livePressures
-      : (simulateStore.result?.pressures ?? {}));
-  const flows =
-    preview?.flows ??
-    step?.flows ??
-    (Object.keys(simulateStore.liveFlows).length > 0
-      ? simulateStore.liveFlows
-      : (simulateStore.result?.flows ?? {}));
+  const pressures = staleNomination
+    ? {}
+    : (preview?.pressures ??
+      step?.pressures ??
+      (Object.keys(simulateStore.livePressures).length > 0
+        ? simulateStore.livePressures
+        : (simulateStore.result?.pressures ?? {})));
+  const flows = staleNomination
+    ? {}
+    : (preview?.flows ??
+      step?.flows ??
+      (Object.keys(simulateStore.liveFlows).length > 0
+        ? simulateStore.liveFlows
+        : (simulateStore.result?.flows ?? {})));
 
   if (Object.keys(pressures).length > 0) {
     updateNodePressureColors(pressures);
+  } else {
+    resetNodesToDefaultColor();
   }
 
-  applyNovaDeficitHighlights();
+  if (!staleNomination) {
+    applyNovaDeficitHighlights();
+  }
 
   if (Object.keys(flows).length > 0) {
     updatePipeFlowColors(flows);
+  } else {
+    resetPipesToKindColor();
   }
 
   applyCalibrationResidualHighlights(pressures);
   renderUpdateMs.value = performance.now() - startedAt;
+  updateNodeLod();
+}
+
+function resetNodesToDefaultColor() {
+  for (const entity of nodeEntitiesById.values()) {
+    if (!entity.point) continue;
+    entity.point.color = Color.CYAN;
+  }
 }
 
 function applyCalibrationResidualHighlights(pressures: Record<string, number>) {
@@ -750,6 +843,24 @@ function applyCalibrationResidualHighlights(pressures: Record<string, number>) {
 }
 
 function updateNodePressureColors(pressures: Record<string, number>) {
+  const useContract =
+    simulateStore.novaActive &&
+    !simulateStore.nominationChangedSinceLastRun &&
+    hasContractMarginScale(simulateStore.pressureMargins, simulateStore.pressureSlips);
+  if (useContract) {
+    for (const [nodeId, entity] of nodeEntitiesById.entries()) {
+      if (!entity.point) continue;
+      const margin = contractMarginForNode(
+        nodeId,
+        simulateStore.pressureMargins,
+        simulateStore.pressureSlips,
+      );
+      entity.point.color = Color.fromCssColorString(
+        margin == null ? UNCONSTRAINED_NODE_CSS : contractMarginToCss(margin),
+      );
+    }
+    return;
+  }
   const values = Object.values(pressures);
   const { min, max } = pressureRange(values);
   for (const [nodeId, entity] of nodeEntitiesById.entries()) {
@@ -763,6 +874,7 @@ const NOVA_DEFICIT_COLOR = Color.fromCssColorString('#ff1744');
 const NOVA_DEFICIT_PIXEL_SIZE = 16;
 
 function applyNovaDeficitHighlights() {
+  if (simulateStore.nominationChangedSinceLastRun) return;
   const slips = simulateStore.pressureSlips;
   if (slips.length === 0) return;
   for (const slip of slips) {
@@ -781,6 +893,7 @@ function updatePipeFlowColors(flows: Record<string, number>) {
     const flow = flows[pipeId] ?? 0;
     const ratio = Math.abs(flow) / maxFlow;
     const color = Color.fromHsl(0.33 * (1 - ratio), 1.0, 0.5);
+    pipeResultColorById.set(pipeId, color);
     if (!entity.polyline) continue;
     entity.polyline.material = new PolylineGlowMaterialProperty({
       glowPower: 0.3,
@@ -791,33 +904,67 @@ function updatePipeFlowColors(flows: Record<string, number>) {
   for (const [pipeId, polyline] of pipePolylinesById.entries()) {
     const flow = flows[pipeId] ?? 0;
     const ratio = Math.abs(flow) / maxFlow;
-    polyline.material = createPrimitivePipeMaterial(Color.fromHsl(0.33 * (1 - ratio), 1.0, 0.5));
+    const color = Color.fromHsl(0.33 * (1 - ratio), 1.0, 0.5);
+    pipeResultColorById.set(pipeId, color);
+    polyline.material = createPrimitivePipeMaterial(color);
+  }
+}
+
+/**
+ * Aucun débit à afficher (pas de run, ou nomination modifiée depuis le dernier verdict) :
+ * les conduites reviennent à leur couleur de type, sinon une coloration périmée continue
+ * de se lire comme un résultat.
+ */
+function resetPipesToKindColor() {
+  pipeResultColorById.clear();
+  const kindOf = (pipeId: string) =>
+    networkStore.pipes.find((pipe) => pipe.id === pipeId)?.kind ?? 'pipe';
+
+  for (const [pipeId, entity] of pipeEntitiesById.entries()) {
+    if (!entity.polyline) continue;
+    entity.polyline.material = new PolylineGlowMaterialProperty({
+      glowPower: 0.2,
+      color: pipeLineColor(kindOf(pipeId)),
+    });
+  }
+
+  for (const [pipeId, polyline] of pipePolylinesById.entries()) {
+    polyline.material = createPrimitivePipeMaterial(pipeLineColor(kindOf(pipeId)));
   }
 }
 
 function updateNodeLod() {
   if (!viewer) return;
   const height = viewer.camera.positionCartographic.height;
+  cameraHeightM.value = height;
   const networkSize = networkStore.nodes.length;
   const stride = nodeStride(height, networkSize);
   const selectedKind = editorStore.selectedKind;
   const selectedNodeId = editorStore.selectedId;
+  const novaDeficitIds = new Set(
+    simulateStore.nominationChangedSinceLastRun
+      ? []
+      : deficitSinkIds(simulateStore.sinkDiagnostics, simulateStore.novaVerdict),
+  );
 
   nodeEntities.forEach((entity, index) => {
     const nodeId = entity.id?.startsWith('node:') ? entity.id.slice(5) : '';
     const selected = selectedKind === 'node' && selectedNodeId === nodeId;
     const contingency = contingencyViolationSet.value.has(nodeId);
-    const basePixelSize = selected ? 14 : contingency ? 10 : 8;
+    const novaDeficit = novaDeficitIds.has(nodeId);
+    const basePixelSize = selected ? 14 : contingency || novaDeficit ? 10 : 8;
     const pointVisible = nodePointVisible(index, stride, {
       nodeId,
       selectedKind,
       selectedNodeId,
       isContingency: contingency,
+      isNovaDeficit: novaDeficit,
     });
     const labelVisible = labelLodVisible(height, networkSize, {
       nodeId,
       selectedKind,
       selectedNodeId,
+      isNovaDeficit: novaDeficit,
     });
 
     if (entity.point) {
@@ -829,6 +976,13 @@ function updateNodeLod() {
     }
     entity.show = pointVisible || labelVisible;
   });
+
+  const equipmentLabelsVisible = height < SMALL_NETWORK_LABEL_MAX_HEIGHT;
+  for (const entity of equipmentEntitiesById.values()) {
+    if (entity.label) {
+      entity.label.show = equipmentLabelsVisible;
+    }
+  }
 
   // LOD écrase pixelSize : réappliquer les highlights NoVa après coup.
   applyNovaDeficitHighlights();
@@ -862,17 +1016,14 @@ function updateNodeLod() {
   top: 12px;
   left: calc(var(--map-sidebar-width) + var(--map-sidebar-inset) + 8px);
   z-index: 10;
-  max-width: min(360px, calc(100% - var(--map-sidebar-width) - 3 * var(--map-sidebar-inset)));
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 9px;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
   border-radius: 6px;
   background: rgba(28, 24, 12, 0.9);
   border: 1px solid rgba(245, 196, 75, 0.55);
-  color: #f3dfa7;
-  font-size: 12px;
-  line-height: 1.2;
   cursor: help;
   pointer-events: auto;
 }
@@ -938,7 +1089,6 @@ function updateNodeLod() {
 
   .positioning-warning {
     left: var(--map-sidebar-inset);
-    max-width: calc(100% - 2 * var(--map-sidebar-inset));
   }
 }
 </style>

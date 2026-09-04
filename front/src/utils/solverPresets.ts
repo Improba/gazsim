@@ -1,6 +1,7 @@
 import type { WsStartOptions } from 'src/services/ws';
 
-export type NetworkTier = 'demo' | 'standard' | 'large' | 'xlarge';
+/** Doit rester aligné sur `NetworkTier` côté backend (serde `snake_case`). */
+export type NetworkTier = 'demo' | 'standard' | 'large' | 'x_large';
 
 export interface SolverPresetOptions extends WsStartOptions {
   continuation_scales?: number[];
@@ -10,7 +11,7 @@ export function tierForNodeCount(nodeCount: number): NetworkTier {
   if (nodeCount <= 50) return 'demo';
   if (nodeCount <= 199) return 'standard';
   if (nodeCount <= 2000) return 'large';
-  return 'xlarge';
+  return 'x_large';
 }
 
 export function presetForNodeCount(nodeCount: number): SolverPresetOptions {
@@ -43,7 +44,7 @@ export function presetForNodeCount(nodeCount: number): SolverPresetOptions {
         continuation_scales: [0.05, 0.1, 0.2, 0.4, 0.7, 1.0],
         robust_mode: true,
       };
-    case 'xlarge':
+    case 'x_large':
       return {
         max_iter: 12,
         tolerance: 1e-2,
@@ -83,7 +84,7 @@ export function networkTierLabel(tier: NetworkTier): string {
       return 'Standard';
     case 'large':
       return 'Transport';
-    case 'xlarge':
+    case 'x_large':
       return 'Très grand';
   }
 }

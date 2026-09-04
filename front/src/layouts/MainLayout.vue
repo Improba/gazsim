@@ -12,36 +12,42 @@
           @click="leftDrawer = !leftDrawer"
         />
 
-        <q-toolbar-title class="text-weight-bold nav-title">
-          <q-icon name="gas_meter" size="sm" class="q-mr-xs" />
-          GazFlow
+        <q-toolbar-title shrink class="text-weight-bold nav-title">
+          <router-link
+            :to="{ name: 'dashboard' }"
+            class="nav-brand"
+            aria-label="Retour à l'accueil"
+          >
+            <q-icon name="gas_meter" size="sm" class="q-mr-xs" />
+            GazFlow
+            <q-tooltip>Accueil</q-tooltip>
+          </router-link>
         </q-toolbar-title>
 
-        <nav class="gt-md row items-center no-wrap nav-desktop" aria-label="Navigation principale">
-          <q-btn flat label="Tableau de bord" :to="{ name: 'dashboard' }" exact active-class="nav-active" />
-          <q-btn flat label="Valider" :to="{ name: 'map' }" active-class="nav-active">
+        <nav class="gt-sm row items-center no-wrap nav-desktop" aria-label="Navigation principale">
+          <q-btn flat no-caps label="Tableau de bord" :to="{ name: 'dashboard' }" exact active-class="nav-active" />
+          <q-btn flat no-caps label="Tenue pression" :to="{ name: 'map' }" active-class="nav-active">
             <q-tooltip>Valider une nomination</q-tooltip>
-          </q-btn>
-          <q-btn flat label="N-1" :to="{ name: 'contingency' }" active-class="nav-active">
-            <q-tooltip>Analyser N-1</q-tooltip>
-          </q-btn>
-          <q-btn flat label="Calage" :to="{ name: 'calibration' }" active-class="nav-active">
-            <q-tooltip>Caler sur SCADA</q-tooltip>
-          </q-btn>
-          <q-btn flat label="Transitoire" :to="{ name: 'transient' }" active-class="nav-active">
-            <q-tooltip>Linepack, saut de soutirage, horizon horaire</q-tooltip>
           </q-btn>
 
           <q-separator vertical dark class="nav-sep" />
 
-          <q-btn-dropdown flat label="Outils" icon="handyman" auto-close>
-            <q-list dense>
+          <q-btn-dropdown
+            flat
+            no-caps
+            label="Outils"
+            icon="handyman"
+            auto-close
+            content-class="bg-dark"
+          >
+            <q-list dark dense>
               <q-item
                 v-for="item in toolLinks"
                 :key="item.name"
                 :to="{ name: item.name }"
                 clickable
                 v-close-popup
+                active-class="text-primary"
               >
                 <q-item-section avatar><q-icon :name="item.icon" /></q-item-section>
                 <q-item-section>{{ item.label }}</q-item-section>
@@ -67,7 +73,7 @@
         </q-btn>
       </q-toolbar>
 
-      <GlobalStatusBar />
+      <StudyContextBar />
     </q-header>
 
     <q-drawer
@@ -79,14 +85,14 @@
       :width="280"
     >
       <q-list padding>
-        <q-item-label header class="text-grey-5">Workflows</q-item-label>
+        <q-item-label header class="text-grey-5">Étude</q-item-label>
         <q-item
-          v-for="item in workflowLinks"
+          v-for="item in studyLinks"
           :key="item.name"
           :to="{ name: item.name }"
           clickable
           v-ripple
-          exact
+          :exact="item.name === 'dashboard'"
           active-class="nav-drawer-active"
           @click="leftDrawer = false"
         >
@@ -162,7 +168,7 @@ import { useNetworkStore } from 'src/stores/network';
 import { useNominationStore } from 'src/stores/nomination';
 import { useContingencyStore } from 'src/stores/contingency';
 import { useSimulateStore } from 'src/stores/simulate';
-import GlobalStatusBar from 'src/components/GlobalStatusBar.vue';
+import StudyContextBar from 'src/components/StudyContextBar.vue';
 
 const showInfo = ref(false);
 const leftDrawer = ref(false);
@@ -187,15 +193,15 @@ const refreshTooltip = computed(() =>
     : 'Relancer la dernière validation (mêmes paramètres)',
 );
 
-const workflowLinks = [
+const studyLinks = [
   { name: 'dashboard', label: 'Tableau de bord', icon: 'dashboard' },
-  { name: 'map', label: 'Valider une nomination', icon: 'verified' },
-  { name: 'contingency', label: 'Analyser N-1', icon: 'shield' },
-  { name: 'calibration', label: 'Caler sur SCADA', icon: 'tune' },
-  { name: 'transient', label: 'Transitoire', icon: 'timeline' },
+  { name: 'map', label: 'Tenue pression', icon: 'verified' },
 ] as const;
 
 const toolLinks = [
+  { name: 'contingency', label: 'Analyser N-1', icon: 'shield' },
+  { name: 'calibration', label: 'Caler sur SCADA', icon: 'tune' },
+  { name: 'transient', label: 'Transitoire', icon: 'timeline' },
   { name: 'workspace', label: "Espace d'analyse", icon: 'analytics' },
   { name: 'import', label: 'Importer un réseau', icon: 'upload' },
   { name: 'exports', label: 'Exports', icon: 'download' },
@@ -280,6 +286,18 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 4px;
+}
+
+.nav-brand {
+  display: inline-flex;
+  align-items: center;
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.nav-brand:hover {
+  color: var(--q-primary);
 }
 
 .nav-desktop {

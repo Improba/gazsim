@@ -1,6 +1,8 @@
 import { computed, type ComputedRef } from 'vue';
 import { useContingencyStore } from 'src/stores/contingency';
 import { useSimulateStore } from 'src/stores/simulate';
+import { violationsOf } from 'src/utils/contingencyViolations';
+import { userFacingSolverWarning } from 'src/utils/novaLabels';
 
 export type AlertTone = 'danger' | 'warning' | 'info';
 
@@ -108,7 +110,7 @@ export function useAlertCenter(): { alerts: ComputedRef<Alert[]> } {
         id: `warning:${stableHash(warning.text)}:${warning.occurrence}`,
         tone: warningTone(warning.text),
         title: 'Message solveur',
-        body: warning.text,
+        body: userFacingSolverWarning(warning.text),
       });
     }
 
@@ -123,7 +125,7 @@ export function useAlertCenter(): { alerts: ComputedRef<Alert[]> } {
     }
 
     for (const contingencyResult of contingencyStore.results) {
-      const violationCount = contingencyResult.violations.length;
+      const violationCount = violationsOf(contingencyResult).length;
       if (contingencyResult.converged && violationCount === 0) {
         continue;
       }

@@ -342,6 +342,50 @@ describe('useSimulateStore', () => {
     expect(payload.options.gas_composition.ch4).toBe(0.97);
   });
 
+  it('validateNomination switches nomination and drops the previous session reduction', async () => {
+    const store = useSimulateStore();
+    const nominationStore = useNominationStore();
+    nominationStore.selectById('nomination_pointe');
+    store.demandOverrides = { exit01: -2 };
+
+    await store.validateNomination('nomination_jour');
+
+    expect(nominationStore.activeId).toBe('nomination_jour');
+    expect(store.demandOverrides).toEqual({});
+    const payload = wsSpies.startSimulation.mock.calls[0]?.[0];
+    expect(payload.options.scenario_id).toBe('nomination_jour');
+    expect(payload.demands).toBeUndefined();
+  });
+
+  it('validateNomination keeps session reductions when re-validating the same nomination', async () => {
+    const store = useSimulateStore();
+    const nominationStore = useNominationStore();
+    nominationStore.selectById('nomination_pointe');
+    store.demandOverrides = { exit01: -2 };
+
+    await store.validateNomination('nomination_pointe');
+
+    expect(store.demandOverrides).toEqual({ exit01: -2 });
+    const payload = wsSpies.startSimulation.mock.calls[0]?.[0];
+    expect(payload.demands).toEqual({ exit01: -2 });
+  });
+
+  it('records one session verdict per nomination and forgets them on reset', async () => {
+    const store = useSimulateStore();
+
+    await store.hydrateFromNovaRun('run-wp-1');
+
+    expect(store.sessionVerdicts).toEqual({
+      nom: expect.objectContaining({ feasible: true, deficitSinks: [], runId: 'run-wp-1' }),
+    });
+    expect(store.sessionVerdictFor('nom')?.feasible).toBe(true);
+    expect(store.sessionVerdictFor('inconnue')).toBeNull();
+    expect(store.sessionVerdictFor(null)).toBeNull();
+
+    store.resetSimulation();
+    expect(store.sessionVerdicts).toEqual({});
+  });
+
   it('applySinkReduction writes the shared override then re-validates', async () => {
     const store = useSimulateStore();
     const nominationStore = useNominationStore();
@@ -431,6 +475,47 @@ describe('useSimulateStore', () => {
     expect(wsSpies.startSimulation).not.toHaveBeenCalled();
   });
 
+  it('startValidation is a no-op without an active nomination', async () => {
+    const store = useSimulateStore();
+    await store.startValidation();
+    expect(wsSpies.startSimulation).not.toHaveBeenCalled();
+    expect(notifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'Sélectionnez une nomination à valider.' }),
+    );
+  });
+
+  it('applySessionSinkReduction halves a known override then re-validates', async () => {
+    const store = useSimulateStore();
+    const nominationStore = useNominationStore();
+    nominationStore.selectById('nomination_mild_618');
+    store.demandOverrides = { sink_88: -10 };
+    await store.runSimulation({ sink_88: -10 }, { scenario_id: 'nomination_mild_618' });
+    store.loading = false;
+    wsSpies.startSimulation.mockClear();
+
+    await store.applySessionSinkReduction('sink_88');
+
+    expect(store.demandOverrides.sink_88).toBe(-5);
+    expect(store.hasSessionDemandOverrides).toBe(true);
+    expect(store.inputDirty).toBe(false);
+    expect(wsSpies.startSimulation).toHaveBeenCalled();
+  });
+
+  it('applySessionSinkReduction halves adjusted demand when no override was sent', async () => {
+    const store = useSimulateStore();
+    const nominationStore = useNominationStore();
+    nominationStore.selectById('nomination_mild_618');
+    await store.runSimulation(undefined, { scenario_id: 'nomination_mild_618' });
+    store.loading = false;
+    store.adjustedDemands = { sink_88: -8 };
+    wsSpies.startSimulation.mockClear();
+
+    await store.applySessionSinkReduction('sink_88');
+
+    expect(store.demandOverrides.sink_88).toBe(-4);
+    expect(wsSpies.startSimulation).toHaveBeenCalled();
+  });
+
   it('scenarioDirty is false before the first run even with a nomination selected', () => {
     const store = useSimulateStore();
     const nominationStore = useNominationStore();
@@ -449,6 +534,7 @@ describe('useSimulateStore', () => {
     nominationStore.selectById('other_scn');
     expect(store.scenarioDirty).toBe(true);
     expect(store.scenarioStale).toBe(true);
+    expect(store.nominationChangedSinceLastRun).toBe(true);
   });
 
   it('scenarioStale is true before the first run when a nomination is selected', () => {

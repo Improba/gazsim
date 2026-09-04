@@ -8,6 +8,7 @@ import {
   type ContingencyScope,
 } from 'src/services/api';
 import { SimulationWsClient, type WsServerMessage } from 'src/services/ws';
+import { violationsOf } from 'src/utils/contingencyViolations';
 import { formatApiError } from 'src/utils/importError';
 
 type ContingencyStatus = 'idle' | 'running' | 'finished' | 'error';
@@ -53,7 +54,7 @@ export const useContingencyStore = defineStore('contingency', () => {
   const selectedCaseViolationNodeIds = computed<string[]>(() => {
     const current = selectedCase.value;
     if (!current) return [];
-    return Array.from(new Set(current.violations.map((violation) => violation.node_id)));
+    return Array.from(new Set(violationsOf(current).map((violation) => violation.node_id)));
   });
 
   function selectCase(result: ContingencyResult | null) {

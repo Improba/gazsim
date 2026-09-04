@@ -7,8 +7,8 @@
   --scada-text: #d8edf3;
 
   /* Carte : zones réservées pour éviter les superpositions.
-     Hauteur header = toolbar (~50) + GlobalStatusBar (~34) ; sync dynamique dans MainLayout. */
-  --map-app-header-height: 84px;
+     Hauteur header = toolbar (~50) + StudyContextBar (~56) ; sync dynamique dans MainLayout. */
+  --map-app-header-height: 106px;
   --map-editor-toolbar-height: 40px;
   --map-sidebar-width: 360px;
   --map-sidebar-inset: 16px;
@@ -29,6 +29,15 @@ body {
   padding: 0;
   font-family: 'Roboto', sans-serif;
   background: radial-gradient(circle at 15% 15%, #123040 0%, var(--scada-bg) 48%);
+}
+
+/**
+ * Le texte pâle du thème s'arrête à l'application. Quasar téléporte menus, dialogues et
+ * popups de select dans un portail enfant de `body` : porté par `body`, ce texte clair
+ * était hérité par les popups clairs par défaut (contraste 1,2:1, illisible). Les
+ * surfaces sombres, elles, fixent leur couleur via `dark` (`.q-dark`) ou `text-white`.
+ */
+#q-app {
   color: var(--scada-text);
 }
 
@@ -80,6 +89,7 @@ body {
   right: var(--map-sidebar-inset);
   bottom: var(--map-sidebar-inset);
   width: var(--map-legend-width);
+  max-width: var(--map-legend-width);
   z-index: calc(var(--map-overlay-z) + 1);
   pointer-events: auto;
 }
@@ -98,7 +108,7 @@ body {
       (3 * var(--map-sidebar-inset))
   );
   overflow-y: auto;
-  z-index: calc(var(--map-overlay-z) - 5);
+  z-index: calc(var(--map-overlay-z) + 2);
   pointer-events: auto;
 }
 

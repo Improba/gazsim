@@ -1,10 +1,28 @@
 <template>
-  <div class="q-mb-sm">
+  <div class="nomination-panel q-mb-sm">
     <div class="row items-center q-mb-xs no-wrap">
-      <q-icon name="assignment" size="18px" class="q-mr-xs text-secondary" />
+      <q-icon name="assignment" size="18px" class="q-mr-xs text-secondary">
+        <q-tooltip max-width="280px">
+          Quantités entry/exit et bornes pression contractuelles.
+          Valider évalue la tenue de chaque point de livraison.
+        </q-tooltip>
+      </q-icon>
       <span class="text-caption text-bold text-grey-3">Nomination</span>
       <q-space />
       <q-btn
+        v-if="nominationStore.selected?.source === 'imported' && !showDemoPair"
+        flat
+        dense
+        round
+        icon="delete_outline"
+        size="sm"
+        :disable="disabled"
+        @click="onDelete"
+      >
+        <q-tooltip>Supprimer la nomination importée</q-tooltip>
+      </q-btn>
+      <q-btn
+        v-if="!showDemoPair"
         flat
         dense
         round
@@ -23,109 +41,96 @@
         @change="onFileSelected"
       />
     </div>
+
+    <div v-if="showDemoPair" class="nomination-pair">
+      <q-btn
+        unelevated
+        no-caps
+        class="full-width"
+        :color="isSelected(jour?.id) ? 'primary' : 'blue-grey-8'"
+        :outline="!isSelected(jour?.id)"
+        :disable="disabled || !jour"
+        label="Nomination du jour"
+        @click="jour && onSelect(jour.id)"
+      />
+      <q-btn
+        unelevated
+        no-caps
+        class="full-width q-mt-xs"
+        :color="isSelected(pointe?.id) ? 'primary' : 'blue-grey-8'"
+        :outline="!isSelected(pointe?.id)"
+        :disable="disabled || !pointe"
+        label="Nomination de pointe"
+        @click="pointe && onSelect(pointe.id)"
+      />
+      <div class="text-caption text-grey-5 q-mt-xs">
+        Jour : contrat large (20–70 barg). Pointe : besoin 68 barg sur un point.
+      </div>
+    </div>
+
     <q-select
+      v-else
       :model-value="nominationStore.activeId"
-      :options="nominationStore.list"
-      option-label="filename"
+      :options="pickerOptions"
+      :option-label="nominationOptionLabel"
       option-value="id"
       emit-value
       map-options
-      label="Nomination NoVa (.scn)"
+      placeholder="Choisir une nomination"
       dense
       outlined
       dark
+      hide-bottom-space
       clearable
       :loading="nominationStore.loading"
       :disable="disabled"
-      hint="Active le verdict tenue pression (bornes contractuelles)"
       @update:model-value="onSelect"
     >
       <template #option="scope">
         <q-item v-bind="scope.itemProps">
           <q-item-section>
-            <q-item-label>{{ scope.opt.filename }}</q-item-label>
-            <q-item-label caption>
-              <q-badge
-                v-if="scope.opt.source === 'imported'"
-                color="secondary"
-                text-color="black"
-                label="importée"
-                class="q-mr-xs"
-              />
-              <span>{{ scope.opt.relative_path || 'base' }}</span>
+            <q-item-label>{{ nominationOptionLabel(scope.opt) }}</q-item-label>
+            <q-item-label v-if="scope.opt.source === 'imported'" caption>
+              importée
             </q-item-label>
           </q-item-section>
         </q-item>
       </template>
-      <q-tooltip max-width="280px">
-        La nomination fournit les quantités entry/exit et les bornes pression contractuelles.
-        La simulation évalue ensuite la tenue de chaque point de livraison.
-      </q-tooltip>
     </q-select>
-
-    <q-card
-      v-if="nominationStore.selected"
-      flat
-      bordered
-      dark
-      class="bg-grey-10 q-mt-xs"
-    >
-      <q-card-section class="row items-center no-wrap q-py-sm">
-        <q-icon name="description" size="18px" class="q-mr-sm text-grey-5" />
-        <div class="col ellipsis">
-          <div class="text-caption text-bold ellipsis">
-            {{ nominationStore.selected.filename }}
-            <q-badge
-              v-if="nominationStore.selected.source === 'imported'"
-              color="secondary"
-              text-color="black"
-              label="importée"
-              class="q-ml-xs"
-            />
-          </div>
-          <div class="text-caption text-grey-6 ellipsis">
-            {{ nominationStore.selected.relative_path || 'base' }}
-          </div>
-        </div>
-        <q-btn
-          v-if="nominationStore.selected.source === 'imported'"
-          flat
-          dense
-          round
-          icon="delete_outline"
-          size="sm"
-          :disable="disabled"
-          @click="onDelete"
-        >
-          <q-tooltip>Supprimer la nomination importée</q-tooltip>
-        </q-btn>
-        <q-btn
-          flat
-          dense
-          round
-          icon="close"
-          size="sm"
-          :disable="disabled"
-          @click="nominationStore.clear()"
-        >
-          <q-tooltip>Désélectionner la nomination</q-tooltip>
-        </q-btn>
-      </q-card-section>
-    </q-card>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { Notify } from 'quasar';
 import { useNetworkStore } from 'src/stores/network';
 import { useNominationStore } from 'src/stores/nomination';
+import { findDemoPair, nominationPickerLabel } from 'src/utils/nominationPicker';
+import type { NovaScenarioSummary } from 'src/services/api';
 
 defineProps<{ disabled?: boolean }>();
 
 const nominationStore = useNominationStore();
 const networkStore = useNetworkStore();
 const fileInput = ref<HTMLInputElement | null>(null);
+
+const pickerOptions = computed(() => nominationStore.studyList);
+
+const demoPair = computed(() => findDemoPair(pickerOptions.value));
+const jour = computed(() => demoPair.value.jour);
+const pointe = computed(() => demoPair.value.pointe);
+const showDemoPair = computed(() => Boolean(jour.value && pointe.value));
+
+function isSelected(id: string | undefined): boolean {
+  return Boolean(id) && nominationStore.activeId === id;
+}
+
+function nominationOptionLabel(opt: NovaScenarioSummary | string): string {
+  if (typeof opt === 'string') {
+    return nominationPickerLabel(opt);
+  }
+  return nominationPickerLabel(opt.filename);
+}
 
 function onSelect(id: string | null) {
   nominationStore.selectById(id);
@@ -168,9 +173,6 @@ async function onDelete() {
 watch(
   () => networkStore.activeNetwork,
   () => {
-    // Changement de réseau : la liste des nominations change, on recharge et on
-    // désélectionne (une nomination mild_618 n'a pas de sens sur un autre réseau).
-    nominationStore.clear();
     void nominationStore.load(true);
   },
 );

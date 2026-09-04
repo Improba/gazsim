@@ -173,6 +173,7 @@ import { useNetworkStore } from 'src/stores/network';
 import { useNominationStore } from 'src/stores/nomination';
 import { useScenariosStore } from 'src/stores/scenarios';
 import { formatApiError } from 'src/utils/importError';
+import { nominationPickerLabel } from 'src/utils/nominationPicker';
 
 const networkStore = useNetworkStore();
 const nominationStore = useNominationStore();
@@ -188,8 +189,10 @@ const currentResult = ref<BatchRunDetail | null>(null);
 const history = ref<BatchRunSummary[]>([]);
 
 const nominationOptions = computed(() =>
-  nominationStore.list.map((n) => ({
-    label: n.source === 'imported' ? `${n.filename} (importée)` : n.filename,
+  nominationStore.studyList.map((n) => ({
+    label: n.source === 'imported'
+      ? `${nominationPickerLabel(n.filename)} (importée)`
+      : nominationPickerLabel(n.filename),
     value: n.id,
   })),
 );

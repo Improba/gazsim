@@ -1,194 +1,9 @@
 <template>
   <div>
-    <div class="text-h6 q-mb-sm">Validation</div>
-
-    <q-btn
-      label="Charger le cas démo"
-      icon="auto_awesome"
-      color="primary"
-      outline
-      dense
-      class="q-mb-sm full-width"
-      :loading="demoLoading"
-      :disable="simulateStore.loading || demoLoading"
-      @click="loadDemo"
-    >
-      <q-tooltip>
-        GasLib-11, 7 h, −5 °C, profils résidentiels — charge le réseau et lance la simulation
-      </q-tooltip>
-    </q-btn>
-
-    <q-btn
-      label="Importer un réseau"
-      icon="upload_file"
-      color="accent"
-      flat
-      dense
-      class="q-mb-sm full-width"
-      :to="{ name: 'import' }"
-    />
-
-    <div class="row q-col-gutter-sm q-mb-md items-end">
-      <div class="col">
-        <q-select
-          v-model="selectedNetwork"
-          :options="networkStore.availableNetworks"
-          :option-label="networkOptionLabel"
-          emit-value
-          map-options
-          label="Réseau"
-          dense
-          outlined
-          dark
-          :loading="networkStore.switching"
-          :disable="simulateStore.loading || networkStore.switching"
-        />
-      </div>
-      <div class="col-auto">
-        <q-btn
-          label="Charger"
-          icon="hub"
-          color="secondary"
-          :loading="networkStore.switching"
-          :disable="!canLoadNetwork"
-          @click="loadSelectedNetwork"
-        />
-      </div>
-    </div>
-
     <NominationPanel :disabled="simulateStore.loading" />
 
-    <q-expansion-item
-      dense
-      dark
-      icon="tune"
-      label="Réglages avancés"
-      class="q-mb-sm bg-grey-10 rounded-borders"
-    >
-      <div class="q-pa-sm">
-    <q-expansion-item
-      dense
-      dark
-      icon="science"
-      label="Composition gaz"
-      class="q-mb-md bg-grey-10 rounded-borders"
-    >
-      <div class="q-pa-sm text-caption text-grey-4">
-        <span>
-          PCS {{ formatGas(networkStore.gas.pcs_mj_per_nm3) }} MJ/Nm³
-          <q-icon name="help_outline" size="14px" class="q-ml-xs cursor-pointer">
-            <q-tooltip>Pouvoir calorifique supérieur du mélange (ISO 6976)</q-tooltip>
-          </q-icon>
-        </span>
-        —
-        <span>
-          PCI {{ formatGas(networkStore.gas.pci_mj_per_nm3) }} MJ/Nm³
-          <q-icon name="help_outline" size="14px" class="q-ml-xs cursor-pointer">
-            <q-tooltip>Pouvoir calorifique inférieur du mélange (ISO 6976)</q-tooltip>
-          </q-icon>
-        </span>
-        —
-        <span>
-          Wobbe {{ formatGas(networkStore.gas.wobbe_mj_per_nm3) }} MJ/Nm³
-          <q-icon name="help_outline" size="14px" class="q-ml-xs cursor-pointer">
-            <q-tooltip>Indice de Wobbe : interchangeabilité des gaz (EN 437)</q-tooltip>
-          </q-icon>
-        </span>
-      </div>
-      <q-banner
-        v-if="networkStore.gas.warnings?.length"
-        dense
-        rounded
-        class="bg-orange-10 text-orange-2 q-mx-sm q-mb-sm"
-      >
-        <template #avatar>
-          <q-icon name="warning" />
-        </template>
-        <div v-for="(msg, idx) in networkStore.gas.warnings" :key="idx">{{ msg }}</div>
-      </q-banner>
-      <div class="row q-col-gutter-xs q-px-sm q-pb-sm">
-        <div v-for="field in gasFields" :key="field.key" class="col-6">
-          <q-input
-            v-model.number="gasDraft[field.key]"
-            :label="field.label"
-            dense
-            outlined
-            dark
-            type="number"
-            step="0.001"
-            min="0"
-            max="1"
-          />
-        </div>
-      </div>
-      <div class="row q-gutter-sm q-px-sm q-pb-sm">
-        <q-btn dense outline label="G20" color="secondary" @click="applyPreset('g20')" />
-        <q-btn dense outline label="CH₄ pur" color="secondary" @click="applyPreset('ch4')" />
-        <q-btn
-          dense
-          label="Appliquer"
-          color="primary"
-          :loading="gasApplying"
-          :disable="gasApplying || simulateStore.loading"
-          @click="applyGasComposition"
-        />
-      </div>
-    </q-expansion-item>
-
-    <DemandControls v-model="simulateStore.demandOverrides" />
-
-    <ScenarioPanel
-      @demands-resolved="onScenarioDemands"
-      @timeseries-finished="onTimeseriesFinished"
-    />
-
-    <ComparePanel :default-opened="comparePanelOpen" />
-
-    <CompareNominationsPanel />
-
-    <EquipmentControls v-model="simulateStore.equipmentOverrides" />
-
-    <div class="row items-center q-mb-xs">
-      <span class="text-caption text-grey-4">Mode de calcul</span>
-      <q-icon name="help_outline" size="16px" class="q-ml-xs cursor-pointer text-grey-5">
-        <q-tooltip max-width="280px">
-          <div class="q-mb-xs"><b>Standard</b> : {{ SIMULATION_MODE_HELP.free }}</div>
-          <div class="q-mb-xs"><b>Vérifier</b> : {{ SIMULATION_MODE_HELP.check }}</div>
-          <div><b>Optimiser capacités</b> : {{ SIMULATION_MODE_HELP.optimize }}</div>
-        </q-tooltip>
-      </q-icon>
-    </div>
-    <q-btn-toggle
-      v-model="simulateStore.simulationMode"
-      :options="[
-        { label: 'Standard', value: 'free' },
-        { label: 'Vérifier', value: 'check' },
-        { label: 'Optimiser capacités', value: 'optimize' },
-      ]"
-      dense
-      no-caps
-      toggle-color="primary"
-      class="q-mb-sm full-width"
-    />
-
-    <q-toggle
-      v-model="simulateStore.robustMode"
-      label="Convergence renforcée"
-      color="secondary"
-      dark
-      class="q-mb-sm"
-      :disable="simulateStore.loading"
-    >
-      <q-tooltip max-width="300px">
-        Enchaîne des paliers de soutirage (10 % → 30 % → 100 %) pour faciliter la convergence
-        sur les grands réseaux transport.
-      </q-tooltip>
-    </q-toggle>
-      </div>
-    </q-expansion-item>
-
     <q-banner
-      v-if="simulateStore.inputDirty"
+      v-if="simulateStore.inputDirty || simulateStore.hasSessionDemandOverrides"
       dense
       rounded
       class="bg-amber-10 text-amber-2 q-mb-sm"
@@ -196,7 +11,9 @@
       <template #avatar>
         <q-icon name="info" />
       </template>
-      <span v-if="simulateStore.scenarioDirty">Nomination modifiée — relancez pour re-valider la tenue pression.</span>
+      <span v-if="simulateStore.nominationChangedSinceLastRun">Cette nomination n'est pas encore évaluée. Validez pour comparer.</span>
+      <span v-else-if="simulateStore.scenarioDirty">Nomination modifiée. Relancez pour re-valider la tenue pression.</span>
+      <span v-else-if="simulateStore.hasSessionDemandOverrides">{{ SESSION_REDUCTION_BANNER }}</span>
       <span v-else>{{ MODIFIED_WITHDRAWALS_EQUIPMENT_BANNER }}</span>
     </q-banner>
 
@@ -210,28 +27,51 @@
     </q-banner>
 
     <div class="row q-col-gutter-sm q-mb-md">
-      <div class="col">
+      <div v-if="showDemoLaunch" class="col">
         <q-btn
-          :label="launchLabel"
+          no-caps
+          label="Démo nomination"
           color="primary"
+          icon="verified"
+          class="full-width"
+          :loading="isLoadingDemo"
+          :disable="isLoadingDemo || networkStore.switching"
+          @click="onLaunchNominationDemo"
+        />
+      </div>
+      <div v-else class="col">
+        <q-btn
+          no-caps
+          :label="validateLabel"
+          :outline="hasCurrentVerdict"
+          :unelevated="!hasCurrentVerdict"
+          :color="hasCurrentVerdict ? 'grey-5' : 'primary'"
           icon="play_arrow"
           class="full-width"
           :loading="simulateStore.loading"
-          :disable="networkStore.nodes.length === 0"
+          :disable="networkStore.nodes.length === 0 || !novaScenarioId"
           @click="simulateStore.startValidation()"
-        />
+        >
+          <q-tooltip v-if="!novaScenarioId">Choisissez une nomination, puis validez.</q-tooltip>
+        </q-btn>
       </div>
-      <div class="col">
+      <div v-if="simulateStore.loading" class="col">
         <q-btn
           label="Arrêter"
           color="negative"
           icon="stop"
           class="full-width"
-          :disable="!simulateStore.loading"
           @click="simulateStore.cancelSimulation()"
         />
       </div>
     </div>
+
+    <p
+      v-if="novaScenarioId && !hasCurrentVerdict && !simulateStore.loading && !showDemoLaunch"
+      class="text-caption text-grey-5 q-mb-sm"
+    >
+      Validez pour savoir si le contrat tient. Le réseau se colorera selon l'écart à la borne.
+    </p>
 
     <ProgressBar />
 
@@ -257,49 +97,173 @@
           dense
           color="white"
           label="Relancer"
-          :disable="simulateStore.loading || networkStore.nodes.length === 0"
+          :disable="simulateStore.loading || networkStore.nodes.length === 0 || !novaScenarioId"
           @click="simulateStore.startValidation()"
         />
       </template>
     </q-banner>
 
-    <template v-if="simulateStore.result">
-      <NovaWorkflowStepper
-        v-if="novaWorkflowEnabled"
-        class="q-mb-sm"
-      />
-
+    <template v-if="hasCurrentVerdict">
       <SimulationResultsBlock
-        :active-section="novaWorkflowEnabled ? novaCurrentStep : null"
         :show-scenario-dirty="false"
+        :show-solver-details="false"
+        compact-first-fold
         @focus-deficits="focusFirstDeficit"
         @select-node="onSelectSink"
         @run-study="runCapacityStudy"
         @reduce="onReduceSink"
+        @reduce-session="onReduceSession"
         @reduce-all="onReduceAll"
         @save-reduced="onSaveReduced"
-      >
-        <template #after-capacity>
-          <SinkDiagnosticPopover @reduce="onReduceSink" @run-study="runCapacityStudy" />
-        </template>
-      </SimulationResultsBlock>
+      />
     </template>
 
     <q-separator dark class="q-my-sm" />
+
     <q-expansion-item
+      v-model="settingsOpen"
       dense
       dark
-      icon="article"
-      label="Journal de calcul"
-      class="bg-grey-10 rounded-borders"
+      icon="tune"
+      label="Avancé"
+      class="q-mb-sm bg-grey-10 rounded-borders"
     >
-      <LogPanel />
+      <div class="q-pa-sm">
+        <q-expansion-item
+          dense
+          dark
+          icon="science"
+          label="Composition gaz"
+          class="q-mb-md bg-grey-10 rounded-borders"
+        >
+          <div class="q-pa-sm text-caption text-grey-4">
+            <span>
+              PCS {{ formatGas(networkStore.gas.pcs_mj_per_nm3) }} MJ/Nm³
+              <q-icon name="help_outline" size="14px" class="q-ml-xs cursor-pointer">
+                <q-tooltip>Pouvoir calorifique supérieur du mélange (ISO 6976)</q-tooltip>
+              </q-icon>
+            </span>
+            —
+            <span>
+              PCI {{ formatGas(networkStore.gas.pci_mj_per_nm3) }} MJ/Nm³
+              <q-icon name="help_outline" size="14px" class="q-ml-xs cursor-pointer">
+                <q-tooltip>Pouvoir calorifique inférieur du mélange (ISO 6976)</q-tooltip>
+              </q-icon>
+            </span>
+            —
+            <span>
+              Wobbe {{ formatGas(networkStore.gas.wobbe_mj_per_nm3) }} MJ/Nm³
+              <q-icon name="help_outline" size="14px" class="q-ml-xs cursor-pointer">
+                <q-tooltip>Indice de Wobbe : interchangeabilité des gaz (EN 437)</q-tooltip>
+              </q-icon>
+            </span>
+          </div>
+          <q-banner
+            v-if="networkStore.gas.warnings?.length"
+            dense
+            rounded
+            class="bg-orange-10 text-orange-2 q-mx-sm q-mb-sm"
+          >
+            <template #avatar>
+              <q-icon name="warning" />
+            </template>
+            <div v-for="(msg, idx) in networkStore.gas.warnings" :key="idx">{{ msg }}</div>
+          </q-banner>
+          <div class="row q-col-gutter-xs q-px-sm q-pb-sm">
+            <div v-for="field in gasFields" :key="field.key" class="col-6">
+              <q-input
+                v-model.number="gasDraft[field.key]"
+                :label="field.label"
+                dense
+                outlined
+                dark
+                type="number"
+                step="0.001"
+                min="0"
+                max="1"
+              />
+            </div>
+          </div>
+          <div class="row q-gutter-sm q-px-sm q-pb-sm">
+            <q-btn dense outline label="G20" color="secondary" @click="applyPreset('g20')" />
+            <q-btn dense outline label="CH₄ pur" color="secondary" @click="applyPreset('ch4')" />
+            <q-btn
+              dense
+              label="Appliquer"
+              color="primary"
+              :loading="gasApplying"
+              :disable="gasApplying || simulateStore.loading"
+              @click="applyGasComposition"
+            />
+          </div>
+        </q-expansion-item>
+
+        <DemandControls v-model="simulateStore.demandOverrides" />
+
+        <ScenarioPanel
+          @demands-resolved="onScenarioDemands"
+          @timeseries-finished="onTimeseriesFinished"
+        />
+
+        <ComparePanel :model-value="comparePanelOpen" />
+
+        <CompareNominationsPanel />
+
+        <EquipmentControls v-model="simulateStore.equipmentOverrides" />
+
+        <div class="row items-center q-mb-xs">
+          <span class="text-caption text-grey-4">Mode de calcul</span>
+          <q-icon name="help_outline" size="16px" class="q-ml-xs cursor-pointer text-grey-5">
+            <q-tooltip max-width="280px">
+              <div class="q-mb-xs"><b>Standard</b> : {{ SIMULATION_MODE_HELP.free }}</div>
+              <div class="q-mb-xs"><b>Vérifier</b> : {{ SIMULATION_MODE_HELP.check }}</div>
+              <div><b>Optimiser capacités</b> : {{ SIMULATION_MODE_HELP.optimize }}</div>
+            </q-tooltip>
+          </q-icon>
+        </div>
+        <q-btn-toggle
+          v-model="simulateStore.simulationMode"
+          :options="[
+            { label: 'Standard', value: 'free' },
+            { label: 'Vérifier', value: 'check' },
+            { label: 'Optimiser capacités', value: 'optimize' },
+          ]"
+          dense
+          no-caps
+          toggle-color="primary"
+          class="q-mb-sm full-width"
+        />
+
+        <q-toggle
+          v-model="simulateStore.robustMode"
+          label="Convergence renforcée"
+          color="secondary"
+          dark
+          class="q-mb-sm"
+          :disable="simulateStore.loading"
+        >
+          <q-tooltip max-width="300px">
+            Enchaîne des paliers de soutirage (10 % → 30 % → 100 %) pour faciliter la convergence
+            sur les grands réseaux transport.
+          </q-tooltip>
+        </q-toggle>
+
+        <q-expansion-item
+          dense
+          dark
+          icon="article"
+          label="Journal de calcul"
+          class="bg-grey-10 rounded-borders"
+        >
+          <LogPanel />
+        </q-expansion-item>
+      </div>
     </q-expansion-item>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { Notify } from 'quasar';
 import ComparePanel from 'src/components/ComparePanel.vue';
@@ -308,39 +272,57 @@ import DemandControls from 'src/components/DemandControls.vue';
 import EquipmentControls from 'src/components/EquipmentControls.vue';
 import NominationPanel from 'src/components/NominationPanel.vue';
 import ScenarioPanel from 'src/components/ScenarioPanel.vue';
-import SinkDiagnosticPopover from 'src/components/SinkDiagnosticPopover.vue';
 import SimulationResultsBlock from 'src/components/SimulationResultsBlock.vue';
-import NovaWorkflowStepper from 'src/components/workspace/NovaWorkflowStepper.vue';
 import LogPanel from 'src/components/LogPanel.vue';
 import ProgressBar from 'src/components/ProgressBar.vue';
-import { useNovaWorkflow } from 'src/composables/useNovaWorkflow';
 import { useNetworkStore } from 'src/stores/network';
 import { useNominationStore } from 'src/stores/nomination';
 import { useSimulateStore } from 'src/stores/simulate';
 import { useEditorStore } from 'src/stores/editor';
 import { useTimeseriesStore } from 'src/stores/timeseries';
-import { resetStudyState } from 'src/utils/resetStudyState';
 import { G20_NOMINAL, PURE_CH4, type GasCompositionDto } from 'src/services/api';
 import { SIMULATION_MODE_HELP } from 'src/utils/simulationStatus';
-import { MODIFIED_WITHDRAWALS_EQUIPMENT_BANNER } from 'src/utils/novaLabels';
-import { runDemoCase } from 'src/utils/demoCase';
+import {
+  MODIFIED_WITHDRAWALS_EQUIPMENT_BANNER,
+  SESSION_REDUCTION_BANNER,
+} from 'src/utils/novaLabels';
 import { deficitSinkIds } from 'src/utils/novaDeficitSinks';
-import { formatApiError } from 'src/utils/importError';
+import { useDemo } from 'src/composables/useDemo';
 
 const networkStore = useNetworkStore();
 const simulateStore = useSimulateStore();
 const editorStore = useEditorStore();
 const timeseriesStore = useTimeseriesStore();
 const nominationStore = useNominationStore();
-const { enabled: novaWorkflowEnabled, currentStep: novaCurrentStep } = useNovaWorkflow();
 
 const route = useRoute();
 const comparePanelOpen = computed(() => route.query.compare === '1');
+const settingsOpen = ref(false);
+watch(
+  comparePanelOpen,
+  (open) => {
+    if (open) {
+      settingsOpen.value = true;
+    }
+  },
+  { immediate: true },
+);
 const novaScenarioId = computed(() => nominationStore.activeId);
-const selectedNetwork = ref<string | null>(null);
+const { isLoadingDemo, launchDemo } = useDemo();
+const hasCurrentVerdict = computed(
+  () =>
+    simulateStore.result !== null &&
+    !simulateStore.nominationChangedSinceLastRun &&
+    !simulateStore.loading,
+);
+const validateLabel = computed(() => (hasCurrentVerdict.value ? 'Re-valider' : 'Valider'));
+const showDemoLaunch = computed(
+  () =>
+    isLoadingDemo.value ||
+    (!simulateStore.result && !simulateStore.loading && !novaScenarioId.value),
+);
 const gasDraft = ref<GasCompositionDto>({ ...G20_NOMINAL });
 const gasApplying = ref(false);
-const demoLoading = ref(false);
 
 const gasFields = [
   { key: 'ch4' as const, label: 'CH₄' },
@@ -350,50 +332,12 @@ const gasFields = [
   { key: 'h2' as const, label: 'H₂' },
 ];
 
-function networkOptionLabel(id: string): string {
-  return networkStore.networkOptionLabel(id);
-}
-
 function formatGas(value: number | null | undefined): string {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     return 'n/d';
   }
   return value.toFixed(2);
 }
-
-const canLoadNetwork = computed(
-  () =>
-    !!selectedNetwork.value &&
-    selectedNetwork.value !== networkStore.activeNetwork &&
-    !simulateStore.loading,
-);
-
-const launchLabel = computed(() =>
-  novaScenarioId.value ? 'Valider la nomination' : 'Lancer',
-);
-
-onMounted(async () => {
-  try {
-    await networkStore.fetchAvailableNetworks();
-  } catch {
-    // API may not be reachable yet; the selector will remain empty.
-  }
-  if (!networkStore.activeNetwork) {
-    try {
-      await networkStore.fetchNetwork();
-    } catch {
-      // Will retry when user triggers an action.
-    }
-  }
-  selectedNetwork.value = networkStore.activeNetwork;
-});
-
-watch(
-  () => networkStore.activeNetwork,
-  (value) => {
-    selectedNetwork.value = value;
-  },
-);
 
 watch(
   () => networkStore.gas.composition,
@@ -427,8 +371,6 @@ function onScenarioDemands(demands: Record<string, number>) {
 }
 
 function onTimeseriesFinished() {
-  // À la fin d'une série 24 h, on aligne la carte sur le dernier pas pour montrer
-  // l'état final du réseau (le lecteur reste libre de naviguer ensuite).
   if (timeseriesStore.hasResult) {
     timeseriesStore.setSelectedStepIndex(Number.POSITIVE_INFINITY);
   }
@@ -438,12 +380,37 @@ function onSelectSink(nodeId: string) {
   editorStore.selectNode(nodeId);
 }
 
-function focusFirstDeficit() {
-  const first = simulateStore.sinkDiagnostics[0];
-  if (first) {
-    editorStore.selectNode(first.node_id);
+async function onLaunchNominationDemo(): Promise<void> {
+  const raw = route.query.run;
+  const fallbackRunId = typeof raw === 'string' ? raw : undefined;
+  try {
+    await launchDemo(fallbackRunId);
+  } catch {
+    // Erreur déjà notifiée par useDemo.
   }
 }
+
+function focusFirstDeficit() {
+  const first =
+    simulateStore.sinkDiagnostics[0]?.node_id ?? simulateStore.novaVerdict?.deficit_sinks[0];
+  if (first) {
+    editorStore.selectNode(first);
+  }
+}
+
+watch(
+  () => simulateStore.status,
+  (status) => {
+    if (status !== 'converged' || !simulateStore.novaActive) {
+      return;
+    }
+    if (simulateStore.novaVerdict?.feasible) {
+      return;
+    }
+    focusFirstDeficit();
+  },
+  { immediate: true },
+);
 
 function runCapacityStudy() {
   const fromTable = simulateStore.sinkCapacity.map((r) => r.sink_id);
@@ -458,11 +425,15 @@ function onReduceSink(sinkId: string, maxFeasibleQ: number) {
   void simulateStore.applySinkReduction(sinkId, maxFeasibleQ);
 }
 
+function onReduceSession(sinkId: string) {
+  void simulateStore.applySessionSinkReduction(sinkId);
+}
+
 function onReduceAll() {
   void simulateStore.applyAllCapacityReductions();
 }
 
-async function onSaveReduced(demands: Record<string, number>) {
+async function onSaveReduced(demands: Record<string, number>): Promise<void> {
   const baseId = simulateStore.activeScenarioId ?? nominationStore.activeId;
   if (!baseId) {
     Notify.create({
@@ -473,29 +444,9 @@ async function onSaveReduced(demands: Record<string, number>) {
   }
   try {
     await nominationStore.saveReduced(baseId, demands);
+    simulateStore.clearDemandOverrides();
   } catch {
     // Le store affiche déjà une notification négative.
-  }
-}
-
-async function loadSelectedNetwork() {
-  if (!selectedNetwork.value || selectedNetwork.value === networkStore.activeNetwork) {
-    return;
-  }
-  await networkStore.selectNetwork(selectedNetwork.value);
-  resetStudyState();
-}
-
-async function loadDemo() {
-  demoLoading.value = true;
-  try {
-    await runDemoCase();
-    selectedNetwork.value = networkStore.activeNetwork;
-    Notify.create({ type: 'positive', message: 'Cas démo chargé et simulé' });
-  } catch (err) {
-    Notify.create({ type: 'negative', message: formatApiError(err) });
-  } finally {
-    demoLoading.value = false;
   }
 }
 </script>

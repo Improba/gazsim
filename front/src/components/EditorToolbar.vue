@@ -1,41 +1,56 @@
 <template>
-  <q-bar class="editor-toolbar bg-grey-10 text-grey-3">
+  <div
+    class="editor-toolbar-root"
+    :class="{ 'editor-toolbar-root--edit': editorStore.editMode }"
+  >
+  <q-btn
+    v-if="!editorStore.editMode"
+    dense
+    outline
+    no-caps
+    icon="edit"
+    label="Modifier le réseau"
+    color="grey-4"
+    class="editor-toolbar-edit-btn"
+    @click="toggleEditMode"
+  />
+
+  <q-bar v-else class="editor-toolbar bg-grey-10 text-grey-3">
     <q-btn
       dense
       flat
-      icon="bookmark_add"
-      label="Scénario"
-      color="secondary"
-      :disable="networkStore.nodes.length === 0 || scenariosStore.creating"
-      :loading="scenariosStore.creating"
-      @click="openCreateScenario"
-    >
-      <q-tooltip>Sauvegarder l'état topologique actuel comme scénario</q-tooltip>
-    </q-btn>
-
-    <q-btn
-      dense
-      flat
-      icon="compare_arrows"
-      label="Comparer"
-      color="grey-4"
-      :to="{ name: 'map', query: { compare: '1' } }"
-    >
-      <q-tooltip>Comparer deux scénarios (panneau Simulation)</q-tooltip>
-    </q-btn>
-
-    <q-separator vertical inset dark class="q-mx-sm" />
-
-    <q-btn
-      dense
-      flat
-      :icon="editorStore.editMode ? 'edit_off' : 'edit'"
-      :label="editorStore.editMode ? 'Quitter édition' : 'Éditer'"
-      :color="editorStore.editMode ? 'warning' : 'primary'"
+      icon="edit_off"
+      label="Quitter édition"
+      color="warning"
       @click="toggleEditMode"
     />
 
-    <template v-if="editorStore.editMode">
+    <q-separator vertical inset dark class="q-mx-sm" />
+
+      <q-btn
+        dense
+        flat
+        icon="bookmark_add"
+        label="Scénario"
+        color="secondary"
+        :disable="networkStore.nodes.length === 0 || scenariosStore.creating"
+        :loading="scenariosStore.creating"
+        @click="openCreateScenario"
+      >
+        <q-tooltip>Sauvegarder l'état topologique actuel comme scénario</q-tooltip>
+      </q-btn>
+
+      <q-btn
+        dense
+        flat
+        icon="compare_arrows"
+        label="Comparer"
+        color="grey-4"
+        :to="{ name: 'map', query: { compare: '1' } }"
+      >
+        <q-tooltip>Comparer deux scénarios topologiques</q-tooltip>
+      </q-btn>
+
       <q-separator vertical inset dark class="q-mx-sm" />
 
       <q-btn
@@ -90,7 +105,6 @@
           {{ saveLabel }}
         </span>
       </div>
-    </template>
   </q-bar>
 
   <q-dialog v-model="createScenarioOpen">
@@ -124,6 +138,7 @@
       </q-card-actions>
     </q-card>
   </q-dialog>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -189,6 +204,15 @@ async function deleteSelected() {
 </script>
 
 <style scoped>
+.editor-toolbar-root {
+  display: inline-flex;
+}
+
+.editor-toolbar-root--edit {
+  display: block;
+  width: 100%;
+}
+
 .editor-toolbar {
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   min-height: 40px;

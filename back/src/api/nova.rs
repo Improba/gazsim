@@ -1840,4 +1840,121 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
+
+    fn scn_xml_with_exit_envelope(flow_value: &str, lower: &str, upper: &str) -> String {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<boundaryValue xmlns="http://gaslib.zib.de/Gas" xmlns:framework="http://gaslib.zib.de/Framework">
+  <scenario id="demo">
+    <node type="entry" id="entry01">
+      <flow bound="lower" value="{flow_value}" unit="1000m_cube_per_hour"/>
+      <flow bound="upper" value="{flow_value}" unit="1000m_cube_per_hour"/>
+    </node>
+    <node type="exit" id="exit01">
+      <pressure unit="barg" bound="lower" value="{lower}"/>
+      <pressure unit="barg" bound="upper" value="{upper}"/>
+      <flow bound="lower" value="{flow_value}" unit="1000m_cube_per_hour"/>
+      <flow bound="upper" value="{flow_value}" unit="1000m_cube_per_hour"/>
+    </node>
+  </scenario>
+</boundaryValue>"#
+        )
+    }
+
+    async fn import_nomination_xml(
+        app: &axum::Router,
+        filename: &str,
+        xml: &str,
+    ) -> String {
+        use axum::body::{Body, to_bytes};
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+
+        let body = serde_json::json!({ "filename": filename, "xml": xml });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/nova/nominations")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "import {filename}");
+        let imported: serde_json::Value =
+            serde_json::from_slice(&to_bytes(resp.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        imported["id"].as_str().unwrap().to_string()
+    }
+
+    async fn validate_nomination(app: &axum::Router, nomination_id: &str) -> serde_json::Value {
+        use axum::body::{Body, to_bytes};
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+
+        let body = serde_json::json!({ "scenario_id": nomination_id });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/nova/validate")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let status = resp.status();
+        let v: serde_json::Value =
+            serde_json::from_slice(&to_bytes(resp.into_body(), usize::MAX).await.unwrap()).unwrap();
+        assert_eq!(status, StatusCode::OK, "validate {nomination_id}: {v}");
+        v
+    }
+
+    #[tokio::test]
+    async fn demo_jour_and_pointe_nominations_have_distinct_verdicts() {
+        // Garde d'enveloppe sur micro-réseau (P_entry = 70 bar) : la pointe exige une
+        // borne basse au-dessus de l'amont, donc rate quelle que soit la chute de ligne.
+        // Les .scn front (exit01 20–70 vs 68–72 sur GasLib-11) se distinguent par
+        // PressureReachability ; GasLib-11 n'est pas versionné, donc pas le même graphe ici.
+        use std::collections::HashMap;
+
+        let tmp = scratch_dir_for("demo-verdicts");
+        let app = crate::api::create_router_with_runtime_limits_and_datasets(
+            micro_network(),
+            HashMap::new(),
+            "test".to_string(),
+            vec!["test".to_string()],
+            tmp.clone(),
+            2,
+            1,
+        );
+
+        let jour_id = import_nomination_xml(
+            &app,
+            "nomination-jour.scn",
+            &scn_xml_with_exit_envelope("50.00", "20.0", "80.0"),
+        )
+        .await;
+        let pointe_id = import_nomination_xml(
+            &app,
+            "nomination-pointe.scn",
+            &scn_xml_with_exit_envelope("50.00", "80.0", "90.0"),
+        )
+        .await;
+
+        let jour = validate_nomination(&app, &jour_id).await;
+        let pointe = validate_nomination(&app, &pointe_id).await;
+
+        assert_eq!(jour["feasible"], true, "jour should hold: {jour}");
+        assert_eq!(jour["cause"], "Feasible");
+        assert_eq!(pointe["feasible"], false, "pointe should not hold: {pointe}");
+        assert_ne!(pointe["cause"], "Feasible");
+        assert!(
+            pointe["deficit_sinks"]
+                .as_array()
+                .map(|rows| rows.iter().any(|id| id == "exit01"))
+                .unwrap_or(false)
+                || pointe["cause"] == "PressureDeficit"
+                || pointe["cause"] == "PressureReachability"
+                || pointe["cause"] == "PressureExcess",
+            "pointe expected a pressure contract miss: {pointe}",
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }

@@ -11,6 +11,7 @@ export type LabelLodContext = {
   nodeId: string;
   selectedKind: SelectionKind;
   selectedNodeId: string | null;
+  isNovaDeficit?: boolean;
 };
 
 export function labelLodVisible(
@@ -21,6 +22,7 @@ export function labelLodVisible(
   const isSelected =
     context.selectedKind === 'node' && context.selectedNodeId === context.nodeId;
   if (isSelected) return true;
+  if (context.isNovaDeficit) return true;
 
   if (networkSize > LARGE_NETWORK_NODE_COUNT) {
     return cameraHeight < LARGE_NETWORK_LABEL_MAX_HEIGHT;
@@ -66,11 +68,13 @@ export function nodePointVisible(
     selectedKind: SelectionKind;
     selectedNodeId: string | null;
     isContingency: boolean;
+    isNovaDeficit?: boolean;
   },
 ): boolean {
   if (context.selectedKind === 'node' && context.selectedNodeId === context.nodeId) {
     return true;
   }
   if (context.isContingency) return true;
+  if (context.isNovaDeficit) return true;
   return index % stride === 0;
 }

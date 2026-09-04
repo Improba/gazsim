@@ -3,14 +3,16 @@ import { useContingencyStore } from 'src/stores/contingency';
 import { useNetworkStore } from 'src/stores/network';
 import { useNominationStore } from 'src/stores/nomination';
 import { useSimulateStore } from 'src/stores/simulate';
+import { isGreenCase } from 'src/utils/contingencyViolations';
 import { novaOutcomeBadgeLabel } from 'src/utils/novaLabels';
+import { nominationPickerLabel } from 'src/utils/nominationPicker';
 
 export type RunStatusKey = 'idle' | 'running' | 'converged' | 'cancelled' | 'error';
 export type StatusTone = 'success' | 'warning' | 'danger' | 'neutral';
 
 export const RUN_STATUS_LABEL: Record<RunStatusKey, string> = {
-  idle: 'En attente',
-  running: 'En cours',
+  idle: 'Pas encore évaluée',
+  running: 'Calcul en cours',
   converged: 'Calcul terminé',
   cancelled: 'Annulé',
   error: 'Échec',
@@ -43,11 +45,18 @@ type N1Status = {
   total: number;
 };
 
+type StudyHolding = {
+  label: string;
+  tone: StatusTone;
+};
+
 export type GlobalStatus = {
   network: ComputedRef<string | null>;
   nomination: ComputedRef<NominationStatus>;
   runStatus: ComputedRef<RunStatus>;
   n1Status: ComputedRef<N1Status>;
+  holding: ComputedRef<StudyHolding>;
+  studyQuestion: ComputedRef<string>;
 };
 
 function n1Label(status: N1Status['status'], passed: number, total: number): string {
@@ -76,7 +85,7 @@ export function useGlobalStatus(): GlobalStatus {
     const filename = nominationStore.activeFilename;
     return {
       id,
-      label: filename ?? id ?? 'Aucune nomination',
+      label: (filename ? nominationPickerLabel(filename) : null) ?? id ?? 'Aucune nomination',
     };
   });
 
@@ -102,10 +111,56 @@ export function useGlobalStatus(): GlobalStatus {
     };
   });
 
+  const holding = computed<StudyHolding>(() => {
+    if (simulateStore.status === 'running') {
+      return { label: 'Calcul en cours', tone: 'warning' };
+    }
+    if (simulateStore.nominationChangedSinceLastRun) {
+      return { label: 'À re-valider', tone: 'warning' };
+    }
+    const run = runStatus.value;
+    const deficit = simulateStore.novaVerdict?.deficit_sinks[0];
+    if (run.status === 'idle') {
+      return {
+        label: nominationStore.activeId ? 'Pas encore évaluée' : 'Non évaluée',
+        tone: 'neutral',
+      };
+    }
+    if (run.status === 'converged' && run.tone === 'danger' && deficit) {
+      return { label: `${run.label} (${deficit})`, tone: run.tone };
+    }
+    return { label: run.label, tone: run.tone };
+  });
+
+  const studyQuestion = computed(() => {
+    if (!networkStore.activeNetwork) {
+      return 'Chargez un réseau ou lancez la démo pour ouvrir une étude.';
+    }
+    if (simulateStore.status === 'running') {
+      return 'Calcul de la tenue pression en cours.';
+    }
+    if (simulateStore.nominationChangedSinceLastRun) {
+      return 'Validez pour évaluer cette nomination.';
+    }
+    if (simulateStore.novaActive && simulateStore.novaVerdict) {
+      if (simulateStore.novaVerdict.feasible) {
+        return 'Les bornes de livraison sont tenues.';
+      }
+      if (simulateStore.novaVerdict.cause === 'NotSolvedLocal') {
+        return "Le verdict n'a pas pu être établi sur ce calcul.";
+      }
+      return 'Les bornes de livraison ne sont pas tenues.';
+    }
+    if (!nominationStore.activeId) {
+      return 'Choisissez une nomination, puis validez la tenue pression.';
+    }
+    return 'Cette nomination tient-elle les bornes de chaque point de livraison ?';
+  });
+
   const n1Status = computed<N1Status>(() => {
     const results = contingencyStore.results;
     const total = contingencyStore.totalCases || results.length;
-    const passed = results.filter((result) => result.converged && result.violations.length === 0).length;
+    const passed = results.filter(isGreenCase).length;
     const rawStatus = contingencyStore.status;
     const status: N1Status['status'] = rawStatus === 'idle' && total === 0 ? 'n/a' : rawStatus;
     const tone: StatusTone =
@@ -133,5 +188,7 @@ export function useGlobalStatus(): GlobalStatus {
     nomination,
     runStatus,
     n1Status,
+    holding,
+    studyQuestion,
   };
 }

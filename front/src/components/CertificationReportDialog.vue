@@ -3,7 +3,7 @@
     <q-card dark class="bg-grey-10 certification-card">
       <q-card-section class="row items-center no-wrap">
         <div class="col">
-          <div class="text-h6">Rapport de certification NoVa</div>
+          <div class="text-h6">Dossier d'étude</div>
           <div class="text-caption text-grey-5">
             {{ networkStore.activeNetwork ?? '—' }}
             <span v-if="runNominationFilename"> · {{ runNominationFilename }}</span>
@@ -144,7 +144,8 @@ import { useNetworkStore } from 'src/stores/network';
 import { useNominationStore } from 'src/stores/nomination';
 import { useSimulateStore } from 'src/stores/simulate';
 import type { SinkCapacityReport, SinkDiagnostic, ScenarioPressureMargin } from 'src/services/api';
-import { novaOutcomeBadgeLabel } from 'src/utils/novaLabels';
+import { novaOutcomeBadgeLabel, solverSignatureBadgeLabel } from 'src/utils/novaLabels';
+import { nominationDisplayLabel } from 'src/utils/demoNominations';
 
 const props = defineProps<{ modelValue: boolean }>();
 const emit = defineEmits<{ (e: 'update:modelValue', value: boolean): void }>();
@@ -156,7 +157,8 @@ const simulateStore = useSimulateStore();
 const runNominationFilename = computed(() => {
   const id = simulateStore.activeScenarioId;
   if (!id) return null;
-  return nominationStore.list.find((s) => s.id === id)?.filename ?? id;
+  const filename = nominationStore.list.find((s) => s.id === id)?.filename ?? id;
+  return nominationDisplayLabel(filename) || filename;
 });
 
 const verdict = computed(() => simulateStore.novaVerdict);
@@ -194,7 +196,7 @@ const causeText = computed(() => {
   if (!verdict.value) return '';
   if (verdict.value.feasible) return 'Tenue pression OK sur tous les points de livraison.';
   if (verdict.value.cause === 'NotSolvedLocal') {
-    return 'Le solveur local n\'a pas convergé : la faisabilité pression n\'est pas certifiée.';
+    return 'Le solveur local n\'a pas convergé : le point de fonctionnement n\'est pas établi.';
   }
   if (verdict.value.cause === 'ScaleNotAchieved') {
     const scale = verdict.value.demand_scale_achieved;
@@ -212,12 +214,8 @@ const causeText = computed(() => {
 const methodText = computed(() => {
   const sig = verdict.value?.solver_signature;
   if (!sig) return '';
-  const labels: Record<string, string> = {
-    NewtonPosthoc: 'Newton post-hoc',
-    IpoptEscalation: 'IPOPT (escalade)',
-    Unresolved: 'non résolu',
-  };
-  return `Méthode : ${labels[sig] ?? sig}`;
+  const label = solverSignatureBadgeLabel(sig, verdict.value?.feasible);
+  return label ? `Méthode : ${label}` : '';
 });
 
 function close() {
@@ -311,7 +309,7 @@ function exportJson() {
   const anchor = document.createElement('a');
   anchor.href = href;
   const base = simulateStore.activeScenarioId ?? simulateStore.currentRunId ?? 'nova';
-  anchor.download = `rapport-certification-${base}.json`;
+  anchor.download = `dossier-etude-${base}.json`;
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
@@ -380,7 +378,7 @@ function printReport() {
     .join('');
 
   const html = `<!doctype html><html lang="fr"><head><meta charset="utf-8">
-<title>Rapport de certification NoVa</title>
+<title>Dossier d'étude</title>
 <style>
   body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; color: #1a1a1a; margin: 32px; }
   h1 { font-size: 20px; margin: 0 0 4px; }
@@ -397,10 +395,10 @@ function printReport() {
   td.neg, td.r.neg { color: #c62828; font-weight: 700; }
   td.warn, td.r.warn { color: #ef6c00; }
 </style></head><body>
-<h1>Rapport de certification NoVa</h1>
+<h1>Dossier d'étude</h1>
 <div class="meta">
   Réseau : ${escapeHtml(report.network ?? '—')} ·
-  Nomination : ${escapeHtml(report.nomination.filename ?? '—')} ·
+  Nomination : ${escapeHtml(runNominationFilename.value ?? report.nomination.filename ?? '—')} ·
   Date : ${escapeHtml(reportDate.value)} ·
   Run : ${escapeHtml(report.run_id ?? '—')}
 </div>

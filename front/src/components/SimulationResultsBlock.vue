@@ -13,56 +13,163 @@
     </q-banner>
 
     <div
+      v-if="!compactFirstFold"
       data-section="verdict"
       class="nova-section q-mb-sm"
       :class="{ 'nova-section--active': props.activeSection === 'verdict' }"
     >
-      <VerdictCard @focus-deficits="emit('focus-deficits')" />
-    </div>
-
-    <div
-      data-section="causes"
-      class="nova-section q-mb-sm"
-      :class="{ 'nova-section--active': props.activeSection === 'causes' }"
-    >
-      <SinkDiagnosticsList @select-node="(id) => emit('select-node', id)" />
-      <MarginsByConstraint @select-node="(id) => emit('select-node', id)" />
-      <BoundarySupplyList @select-node="(id) => emit('select-node', id)" />
-      <CompressorMapPanel />
-    </div>
-
-    <div
-      data-section="capacity"
-      class="nova-section q-mb-sm"
-      :class="{ 'nova-section--active': props.activeSection === 'capacity' }"
-    >
-      <SinkCapacityTable
-        @run-study="emit('run-study')"
-        @reduce="(sinkId, maxFeasibleQ) => emit('reduce', sinkId, maxFeasibleQ)"
-        @reduce-all="emit('reduce-all')"
-        @save-reduced="(demands) => emit('save-reduced', demands)"
+      <VerdictCard
+        :show-focus-action="true"
+        @focus-deficits="emit('focus-deficits')"
       />
-      <slot name="after-capacity" />
     </div>
 
-    <slot name="before-export">
-      <q-banner
-        v-if="partialContinuationWarning"
-        dense
-        rounded
-        class="bg-orange-10 text-orange-2 q-mb-sm"
-      >
-        <template #avatar>
-          <q-icon name="warning" />
-        </template>
-        {{ partialContinuationWarning }}
-      </q-banner>
-    </slot>
+    <div
+      v-if="compactFirstFold && simulateStore.novaActive && !simulateStore.nominationChangedSinceLastRun && primaryDeficit"
+      class="q-mb-sm"
+    >
+      <q-card flat bordered dark class="bg-grey-10">
+        <q-card-section class="q-py-sm">
+          <div class="text-caption text-bold text-grey-3 q-mb-xs">Cause</div>
+          <div class="text-body2">
+            {{ primaryDeficit.node_id }} : besoin ≥ {{ formatBar(primaryDeficit.required_lower_bar) }} bar,
+            pression {{ formatBar(primaryDeficit.max_upstream_pressure_bar) }} bar.
+          </div>
+          <div class="q-mt-sm">
+            <q-btn
+              dense
+              no-caps
+              unelevated
+              color="secondary"
+              icon="tune"
+              label="Réduire ce point"
+              :disable="simulateStore.loading"
+              @click="emit('reduce-session', primaryDeficit.node_id)"
+            />
+          </div>
+        </q-card-section>
+      </q-card>
+    </div>
 
+    <q-btn
+      v-if="compactFirstFold && simulateStore.novaActive && simulateStore.hasSessionDemandOverrides && !simulateStore.nominationChangedSinceLastRun"
+      dense
+      no-caps
+      unelevated
+      color="primary"
+      icon="save"
+      label="Enregistrer la nomination de session"
+      class="full-width q-mb-sm"
+      :disable="simulateStore.loading || !novaNominationId"
+      @click="emitSaveSession"
+    />
+
+    <StudyNextSteps v-if="compactFirstFold" @open-dossier="showReport = true" />
+
+    <q-expansion-item
+      v-if="simulateStore.novaActive && !simulateStore.nominationChangedSinceLastRun"
+      dense
+      dark
+      icon="more_horiz"
+      :label="compactFirstFold ? 'Détail du diagnostic' : 'Poursuivre l\'étude'"
+      class="q-mb-sm bg-grey-10 rounded-borders"
+      :default-opened="!compactFirstFold"
+    >
+      <div class="q-pa-sm">
+        <div
+          data-section="causes"
+          class="nova-section q-mb-sm"
+          :class="{ 'nova-section--active': props.activeSection === 'causes' }"
+        >
+          <SinkDiagnosticsList @select-node="(id) => emit('select-node', id)" />
+          <MarginsByConstraint @select-node="(id) => emit('select-node', id)" />
+          <BoundarySupplyList @select-node="(id) => emit('select-node', id)" />
+          <CompressorMapPanel />
+        </div>
+
+        <div
+          data-section="capacity"
+          class="nova-section q-mb-sm"
+          :class="{ 'nova-section--active': props.activeSection === 'capacity' }"
+        >
+          <SinkCapacityTable
+            @run-study="emit('run-study')"
+            @reduce="(sinkId, maxFeasibleQ) => emit('reduce', sinkId, maxFeasibleQ)"
+            @reduce-all="emit('reduce-all')"
+            @save-reduced="(demands) => emit('save-reduced', demands)"
+          />
+          <slot name="after-capacity" />
+        </div>
+
+        <slot name="before-export">
+          <q-banner
+            v-if="partialContinuationWarning"
+            dense
+            rounded
+            class="bg-orange-10 text-orange-2 q-mb-sm"
+          >
+            <template #avatar>
+              <q-icon name="warning" />
+            </template>
+            {{ partialContinuationWarning }}
+          </q-banner>
+        </slot>
+
+        <div class="q-gutter-y-sm">
+          <q-btn
+            v-if="simulateStore.hasSessionDemandOverrides"
+            dense
+            unelevated
+            color="primary"
+            icon="save"
+            label="Enregistrer la nomination de session"
+            class="full-width"
+            :disable="simulateStore.loading || !novaNominationId"
+            @click="emitSaveSession"
+          />
+          <!-- En premier pli, dossier et N-1 sont déjà offerts par StudyNextSteps. -->
+          <q-btn
+            v-if="!compactFirstFold"
+            dense
+            outline
+            color="primary"
+            icon="assignment_turned_in"
+            :label="STUDY_DOSSIER_LABEL"
+            class="full-width"
+            :disable="simulateStore.loading"
+            @click="showReport = true"
+          />
+          <q-btn
+            v-if="novaNominationId && !compactFirstFold"
+            dense
+            outline
+            color="warning"
+            icon="warning_amber"
+            label="Analyser N-1 sur cette nomination"
+            class="full-width"
+            :disable="contingencyCtaDisabled"
+            :to="contingencyCtaDisabled ? undefined : contingencyNominationLink"
+          >
+            <q-tooltip>{{ contingencyCtaTooltip }}</q-tooltip>
+          </q-btn>
+          <q-btn
+            v-if="showWorkspaceNextStep"
+            dense
+            outline
+            color="primary"
+            icon="analytics"
+            label="Ouvrir l'espace d'analyse"
+            class="full-width"
+            :to="{ name: 'workspace' }"
+          />
+        </div>
+      </div>
+    </q-expansion-item>
+
+    <template v-if="!simulateStore.novaActive">
     <div
       data-section="export"
       class="nova-section q-mb-sm"
-      :class="{ 'nova-section--active': props.activeSection === 'export' }"
     >
       <div class="text-subtitle2 q-mb-xs">
         {{ simulateStore.novaActive ? 'Exporter' : `Convergence en ${iterationsLabel} itérations (${CONVERGENCE_GAP_LABEL.toLowerCase()} : ${residualLabel})` }}
@@ -89,7 +196,7 @@
         outline
         color="primary"
         icon="assignment_turned_in"
-        label="Rapport de certification"
+        label="Dossier d'étude"
         class="full-width"
         :disable="simulateStore.loading"
         @click="showReport = true"
@@ -135,147 +242,6 @@
       />
     </div>
 
-    <CertificationReportDialog v-model="showReport" />
-
-    <q-expansion-item
-      v-if="simulateStore.novaActive"
-      dense
-      dark
-      icon="science"
-      label="Détails techniques"
-      class="q-mb-sm bg-grey-10 rounded-borders"
-    >
-      <div class="q-pa-sm">
-        <div class="text-caption text-grey-5 q-mb-sm">
-          {{ iterationsLabel }} itérations · {{ CONVERGENCE_GAP_LABEL.toLowerCase() }} {{ residualLabel }}
-        </div>
-        <template v-if="props.showSolverDetails">
-          <div v-if="simulateStore.capacityViolations.length > 0" class="q-mb-sm">
-            <q-banner dense class="bg-red-10 text-white q-mb-sm" rounded>
-              <template #avatar>
-                <q-icon name="warning" />
-              </template>
-              {{ simulateStore.capacityViolations.length }} violation(s) de capacité
-            </q-banner>
-            <div
-              v-for="v in simulateStore.capacityViolations"
-              :key="v.element_id + v.bound_type"
-              class="text-caption q-mb-xs"
-            >
-              <q-icon
-                :name="v.bound_type === 'max' ? 'arrow_upward' : 'arrow_downward'"
-                color="red-4"
-                size="14px"
-              />
-              <span class="text-bold">{{ v.element_id }}</span>:
-              {{ formatFinite(v.actual) }} Nm³/s
-              ({{ v.bound_type === 'max' ? 'max' : 'min' }}: {{ formatFinite(v.limit) }})
-            </div>
-          </div>
-
-          <q-expansion-item
-            v-if="adjustedDemandEntries.length > 0"
-            dense
-            dark
-            icon="tune"
-            :label="`Soutirages ajustés (${adjustedDemandEntries.length})`"
-            class="q-mb-sm bg-grey-10 rounded-borders"
-          >
-            <div class="q-pa-sm">
-              <div
-                v-for="entry in adjustedDemandEntries"
-                :key="'adj-' + entry.nodeId"
-                class="text-caption q-mb-xs"
-              >
-                <q-icon
-                  v-if="simulateStore.activeBounds.includes(String(entry.nodeId))"
-                  name="lock"
-                  color="amber-5"
-                  size="14px"
-                />
-                {{ entry.nodeId }}: {{ formatFinite(entry.value) }} Nm³/s
-              </div>
-            </div>
-          </q-expansion-item>
-
-          <div v-if="networkWarnings.length > 0" class="q-mb-sm">
-            <q-banner dense class="bg-amber-10 text-white q-mb-sm" rounded>
-              <template #avatar>
-                <q-icon name="info" />
-              </template>
-              {{ networkWarnings.length }} avertissement(s) réseau
-            </q-banner>
-            <div
-              v-for="(w, idx) in networkWarnings"
-              :key="'warn-' + idx"
-              class="text-caption q-mb-xs text-amber-3"
-            >
-              {{ w }}
-            </div>
-          </div>
-
-          <q-expansion-item
-            v-if="simulateStore.equipmentStates.length > 0"
-            dense
-            dark
-            icon="settings_input_component"
-            :label="`${EQUIPMENT_SETTINGS_SECTION_LABEL} (${simulateStore.equipmentStates.length})`"
-            class="q-mb-sm bg-grey-10 rounded-borders"
-          >
-            <div class="q-pa-sm">
-              <div
-                v-for="eq in simulateStore.equipmentStates"
-                :key="eq.pipe_id"
-                class="text-caption q-mb-sm"
-              >
-                <span class="text-bold">{{ eq.pipe_id }}</span>
-                <span class="text-grey-5"> — {{ equipmentKindLabel(eq.kind) }}</span>
-                <q-badge
-                  :color="eq.mode === 'active' ? 'green-8' : 'orange-9'"
-                  class="q-ml-xs"
-                >
-                  {{ regulatorModeLabel(eq.mode) }}
-                </q-badge>
-              </div>
-            </div>
-          </q-expansion-item>
-        </template>
-
-        <q-expansion-item
-          dense
-          dark
-          icon="speed"
-          :label="`Pressions (${pressureCount})`"
-          class="q-mb-sm bg-grey-10 rounded-borders"
-        >
-          <div class="q-pa-sm">
-            <ResultValueList
-              :items="simulateStore.result?.pressures ?? {}"
-              :decimals="2"
-              search-placeholder="Filtrer un nœud…"
-            />
-          </div>
-        </q-expansion-item>
-
-        <q-expansion-item
-          dense
-          dark
-          icon="water_drop"
-          :label="`Débits (${flowCount})`"
-          class="bg-grey-10 rounded-borders"
-        >
-          <div class="q-pa-sm">
-            <ResultValueList
-              :items="simulateStore.result?.flows ?? {}"
-              :decimals="4"
-              search-placeholder="Filtrer une conduite…"
-            />
-          </div>
-        </q-expansion-item>
-      </div>
-    </q-expansion-item>
-
-    <template v-else>
     <template v-if="props.showSolverDetails">
       <div v-if="simulateStore.capacityViolations.length > 0" class="q-mt-md">
         <q-banner dense class="bg-red-10 text-white q-mb-sm" rounded>
@@ -403,6 +369,8 @@
     </q-expansion-item>
     </template>
 
+    <CertificationReportDialog v-model="showReport" />
+
     <slot name="after-export" />
   </div>
 </template>
@@ -416,6 +384,7 @@ import SinkDiagnosticsList from 'src/components/SinkDiagnosticsList.vue';
 import MarginsByConstraint from 'src/components/MarginsByConstraint.vue';
 import BoundarySupplyList from 'src/components/BoundarySupplyList.vue';
 import CompressorMapPanel from 'src/components/workspace/CompressorMapPanel.vue';
+import StudyNextSteps from 'src/components/StudyNextSteps.vue';
 import VerdictCard from 'src/components/VerdictCard.vue';
 import ResultValueList from 'src/components/ResultValueList.vue';
 import type { NovaWorkflowStep } from 'src/composables/useNovaWorkflow';
@@ -424,6 +393,7 @@ import { useSimulateStore } from 'src/stores/simulate';
 import {
   CONVERGENCE_GAP_LABEL,
   EQUIPMENT_SETTINGS_SECTION_LABEL,
+  STUDY_DOSSIER_LABEL,
 } from 'src/utils/novaLabels';
 import { equipmentKindLabel, regulatorModeLabel } from 'src/utils/equipmentLabels';
 
@@ -434,11 +404,14 @@ const props = withDefaults(
     showScenarioDirty?: boolean;
     /** Violations, demandes ajustées, warnings, états d'organes. */
     showSolverDetails?: boolean;
+    /** Premier pli NoVa : un déficit, un levier, le reste sous Poursuivre. */
+    compactFirstFold?: boolean;
   }>(),
   {
     activeSection: null,
     showScenarioDirty: true,
     showSolverDetails: true,
+    compactFirstFold: false,
   },
 );
 
@@ -447,6 +420,7 @@ const emit = defineEmits<{
   (e: 'select-node', nodeId: string): void;
   (e: 'run-study'): void;
   (e: 'reduce', sinkId: string, maxFeasibleQ: number): void;
+  (e: 'reduce-session', sinkId: string): void;
   (e: 'reduce-all'): void;
   (e: 'save-reduced', demands: Record<string, number>): void;
 }>();
@@ -454,9 +428,35 @@ const emit = defineEmits<{
 const simulateStore = useSimulateStore();
 const route = useRoute();
 const showReport = ref(false);
+const compactFirstFold = computed(() => props.compactFirstFold);
 const scenarioDirty = computed(() => simulateStore.scenarioDirty);
 const scenarioStale = computed(() => simulateStore.scenarioStale);
 const showWorkspaceNextStep = computed(() => route.name === 'map');
+
+const primaryDeficit = computed(() => {
+  const diagnostic = simulateStore.sinkDiagnostics[0];
+  if (diagnostic) {
+    return diagnostic;
+  }
+  const slip = simulateStore.pressureSlips.find((item) => item.shortfall_bar > 0);
+  if (!slip) {
+    return null;
+  }
+  return {
+    node_id: slip.node_id,
+    required_lower_bar: slip.lower_bar,
+    max_upstream_pressure_bar: slip.solved_pressure_bar,
+    supply_gap_bar: slip.shortfall_bar,
+    trace: [],
+  };
+});
+
+function formatBar(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) {
+    return 'n/d';
+  }
+  return value.toFixed(2);
+}
 
 const {
   novaNominationId,
@@ -520,6 +520,10 @@ function formatFinite(value: number, digits = 2): string {
     return 'n/d';
   }
   return value.toFixed(digits);
+}
+
+function emitSaveSession(): void {
+  emit('save-reduced', { ...simulateStore.demandOverrides });
 }
 </script>
 

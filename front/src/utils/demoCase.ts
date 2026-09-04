@@ -1,49 +1,57 @@
-import { useDemandProfilesStore } from 'src/stores/demandProfiles';
 import { useNetworkStore } from 'src/stores/network';
+import { useNominationStore } from 'src/stores/nomination';
 import { useSimulateStore } from 'src/stores/simulate';
 import { resetStudyState } from 'src/utils/resetStudyState';
 import {
-  profileFromCategory,
-  resolveDemands,
-  type DayType,
-  type DemandProfileDto,
-} from 'src/utils/demandProfiles';
+  DEMO_JOUR_FILENAME,
+  DEMO_JOUR_SCN_XML,
+  DEMO_NETWORK_ID,
+  DEMO_POINTE_FILENAME,
+  DEMO_POINTE_SCN_XML,
+} from 'src/utils/demoNominations';
 
-export const DEMO_NETWORK_ID = 'GasLib-11';
-export const DEMO_T_EXT_C = -5;
-export const DEMO_HOUR = 7;
-export const DEMO_DAY_TYPE: DayType = 'weekday';
-export const DEMO_DESCRIPTION =
-  'Cas démo hiver — GasLib-11, 7 h, −5 °C, profils résidentiels';
+export { DEMO_NETWORK_ID };
 
-export async function runDemoCase(): Promise<void> {
+async function ensureImportedNomination(filename: string, xml: string): Promise<string> {
+  const nominationStore = useNominationStore();
+  await nominationStore.load(true);
+  const stale = nominationStore.list.filter(
+    (item) => item.filename === filename && item.source === 'imported',
+  );
+  for (const item of stale) {
+    await nominationStore.removeImported(item.id);
+  }
+  const summary = await nominationStore.importFile(
+    new File([xml], filename, { type: 'application/xml' }),
+    { silent: true },
+  );
+  return summary.id;
+}
+
+/**
+ * Charge GasLib-11, importe Jour / Pointe, sélectionne la pointe et lance Valider.
+ * Si le calcul rate et qu'un `fallbackRunId` est fourni, hydrate ce run (`?run=`).
+ */
+export async function runNominationDemo(options?: { fallbackRunId?: string }): Promise<void> {
   const networkStore = useNetworkStore();
-  const demandProfilesStore = useDemandProfilesStore();
+  const nominationStore = useNominationStore();
   const simulateStore = useSimulateStore();
 
   await networkStore.selectNetwork(DEMO_NETWORK_ID);
   resetStudyState();
-  demandProfilesStore.load(DEMO_NETWORK_ID);
 
-  const profiles: Record<string, DemandProfileDto> = {};
-  for (const node of networkStore.nodes) {
-    if (node.pressure_fixed_bar != null) {
-      continue;
+  await ensureImportedNomination(DEMO_JOUR_FILENAME, DEMO_JOUR_SCN_XML);
+  const pointeId = await ensureImportedNomination(DEMO_POINTE_FILENAME, DEMO_POINTE_SCN_XML);
+  nominationStore.selectById(pointeId);
+
+  try {
+    await simulateStore.startValidation();
+  } catch (err) {
+    const fallback = options?.fallbackRunId?.trim();
+    if (fallback) {
+      await simulateStore.hydrateFromNovaRun(fallback);
+      return;
     }
-    const profile = profileFromCategory('residential', DEMO_DAY_TYPE);
-    demandProfilesStore.setProfile(node.id, profile, DEMO_NETWORK_ID);
-    profiles[node.id] = { ...profile };
+    throw err;
   }
-
-  const demands = resolveDemands(profiles, DEMO_T_EXT_C, DEMO_HOUR);
-  simulateStore.setRunScenarioSummary({
-    tExtC: DEMO_T_EXT_C,
-    hour: DEMO_HOUR,
-    dayType: DEMO_DAY_TYPE,
-    description: DEMO_DESCRIPTION,
-  });
-
-  await simulateStore.runSimulation(demands, {
-    gas_composition: { ...networkStore.gas.composition },
-  });
 }

@@ -5,7 +5,7 @@
     icon="compare_arrows"
     label="Comparaison de scénarios"
     class="q-mb-sm"
-    :default-opened="defaultOpened"
+    :model-value="opened"
   >
     <q-card flat bordered class="q-pa-sm bg-grey-10">
       <div class="row q-col-gutter-sm q-mb-sm">
@@ -156,12 +156,15 @@ import { useSimulateStore } from 'src/stores/simulate';
 import { resetStudyState } from 'src/utils/resetStudyState';
 import { formatApiError } from 'src/utils/importError';
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     defaultOpened?: boolean;
+    modelValue?: boolean;
   }>(),
-  { defaultOpened: false },
+  { defaultOpened: false, modelValue: undefined },
 );
+
+const opened = computed(() => props.modelValue ?? props.defaultOpened);
 
 const networkStore = useNetworkStore();
 const scenariosStore = useScenariosStore();

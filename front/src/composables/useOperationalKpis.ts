@@ -2,6 +2,7 @@ import { computed, type ComputedRef } from 'vue';
 import { useAlertCenter } from 'src/composables/useAlertCenter';
 import { useContingencyStore } from 'src/stores/contingency';
 import { useSimulateStore } from 'src/stores/simulate';
+import { isGreenCase } from 'src/utils/contingencyViolations';
 import type { CapacityViolation, SimulationResult } from 'src/services/api';
 
 export type N1ComplianceStatus = 'ok' | 'danger' | 'running' | 'error' | 'n/a';
@@ -155,7 +156,7 @@ export function useOperationalKpis(): OperationalKpis {
     }
     if (contingencyStore.status === 'running') {
       return {
-        passed: results.filter((result) => result.converged && result.violations.length === 0).length,
+        passed: results.filter(isGreenCase).length,
         total,
         status: 'running',
       };
@@ -164,7 +165,7 @@ export function useOperationalKpis(): OperationalKpis {
       return { passed: 0, total, status: 'error' };
     }
 
-    const passed = results.filter((result) => result.converged && result.violations.length === 0).length;
+    const passed = results.filter(isGreenCase).length;
     if (total === 0) {
       return { passed: 0, total: 0, status: 'n/a' };
     }

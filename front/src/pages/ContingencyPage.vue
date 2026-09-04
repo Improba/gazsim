@@ -97,10 +97,16 @@
         </div>
       </q-card-section>
 
-      <q-card-section v-if="contingencyStore.loading && contingencyStore.totalCases > 0">
+      <q-card-section v-if="contingencyStore.loading">
         <div class="text-caption q-mb-xs">
-          Progression {{ contingencyStore.completedCases }}/{{ contingencyStore.totalCases }}
-          ({{ contingencyStore.progressPct }}%)
+          <template v-if="contingencyStore.totalCases > 0">
+            Progression {{ contingencyStore.completedCases }}/{{ contingencyStore.totalCases }}
+            ({{ contingencyStore.progressPct }}%)
+          </template>
+          <template v-else>
+            Analyse en cours : un calcul de régime complet par cas.
+            Activez « Suivi en direct » pour suivre les cas un par un et pouvoir arrêter.
+          </template>
         </div>
         <q-linear-progress
           rounded
@@ -108,7 +114,8 @@
           color="primary"
           track-color="grey-8"
           size="10px"
-          :value="contingencyStore.completedCases / contingencyStore.totalCases"
+          :indeterminate="contingencyStore.totalCases === 0"
+          :value="progressValue"
         />
       </q-card-section>
 
@@ -231,6 +238,7 @@ import { useNetworkStore } from 'src/stores/network';
 import { useNominationStore } from 'src/stores/nomination';
 import { useSimulateStore } from 'src/stores/simulate';
 import ScenarioContextBanner from 'src/components/ScenarioContextBanner.vue';
+import { isRedCase, violationsOf } from 'src/utils/contingencyViolations';
 import { formatApiError } from 'src/utils/importError';
 
 const networkStore = useNetworkStore();
@@ -250,6 +258,11 @@ const nominationScenarioId = computed(() => {
 });
 const report = computed(() => contingencyStore.report);
 const loading = computed(() => contingencyStore.loading);
+const progressValue = computed(() =>
+  contingencyStore.totalCases > 0
+    ? contingencyStore.completedCases / contingencyStore.totalCases
+    : 0,
+);
 
 const launchDisabled = computed(
   () =>
@@ -317,8 +330,8 @@ const sortedRows = computed(() => {
       action: r.case.action,
       converged: r.converged,
       min_pressure_bar: r.min_pressure_bar,
-      violation_count: r.violations.length,
-      is_red: r.violations.length > 0 || !r.converged,
+      violation_count: violationsOf(r).length,
+      is_red: isRedCase(r),
     }))
     .sort((a, b) => {
       if (a.is_red !== b.is_red) return a.is_red ? -1 : 1;

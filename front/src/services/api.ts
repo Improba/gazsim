@@ -55,7 +55,7 @@ export interface NetworkResponse {
   pipes: NetworkPipeDto[];
 }
 
-export type NetworkTier = 'demo' | 'standard' | 'large' | 'xlarge';
+export type NetworkTier = 'demo' | 'standard' | 'large' | 'x_large';
 
 export interface NetworkInfoDto {
   id: string;
@@ -401,7 +401,8 @@ export interface ContingencyResult {
   case: ContingencyCase;
   converged: boolean;
   min_pressure_bar: number;
-  violations: PressureViolation[];
+  /** Absent des rapports où la liste est vide : passer par `violationsOf`. */
+  violations?: PressureViolation[];
   solver_result?: SimulationResult | null;
 }
 

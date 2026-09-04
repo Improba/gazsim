@@ -164,6 +164,7 @@ import { api, type CompareNominationsResponse } from 'src/services/api';
 import { useNetworkStore } from 'src/stores/network';
 import { useNominationStore } from 'src/stores/nomination';
 import { formatApiError } from 'src/utils/importError';
+import { nominationPickerLabel } from 'src/utils/nominationPicker';
 import { novaOutcomeBadgeColor, novaOutcomeBadgeLabel } from 'src/utils/novaLabels';
 
 const networkStore = useNetworkStore();
@@ -175,8 +176,8 @@ const loading = ref(false);
 const result = ref<CompareNominationsResponse | null>(null);
 
 const nominationOptions = computed(() =>
-  nominationStore.list.map((n) => ({
-    label: n.source === 'imported' ? `${n.filename} (importée)` : n.filename,
+  nominationStore.studyList.map((n) => ({
+    label: nominationPickerLabel(n.filename) || n.filename,
     value: n.id,
   })),
 );

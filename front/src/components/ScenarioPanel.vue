@@ -9,7 +9,7 @@
     <q-card flat bordered class="q-pa-sm bg-grey-10">
       <div class="text-caption text-grey-5 q-mb-sm">
         Profiles de demande horaires sur les points de livraison. Ces régimes sont
-        indépendants de la nomination NoVa sélectionnée plus bas : ils servent à
+        indépendants de la nomination NoVa active : ils servent à
         explorer la dynamique journalière (linepack, pics), pas à valider une nomination.
       </div>
       <div class="row q-col-gutter-sm q-mb-sm">
@@ -88,7 +88,7 @@
             @update:model-value="onWeatherFileChange"
           />
           <div class="text-caption text-grey-5 q-mt-xs">
-            {{ weatherFileName ? `Météo chargée: ${weatherFileName} (${weather.length} pas)` : 'Météo par défaut: journée hiver (24 pas)' }}
+            {{ weatherFileName ? `Météo chargée: ${weatherFileName} (${weather.length} pas)` : 'Météo par défaut : journée type (24 pas)' }}
           </div>
         </div>
         <div class="col-12 col-md-5">

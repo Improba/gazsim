@@ -148,4 +148,63 @@ describe('useNominationStore', () => {
       }),
     );
   });
+
+  it('discards a stale list response when a newer load started', async () => {
+    const store = useNominationStore();
+    let releaseFirst: ((value: Array<{ id: string; filename: string; relative_path: string }>) => void) | undefined;
+    const first = new Promise<Array<{ id: string; filename: string; relative_path: string }>>((resolve) => {
+      releaseFirst = resolve;
+    });
+    apiSpies.listNovaScenarios
+      .mockImplementationOnce(() => first)
+      .mockResolvedValueOnce([
+        { id: 'imported-pointe', filename: 'nomination-pointe.scn', relative_path: '' },
+      ]);
+
+    const stale = store.load(true);
+    const fresh = store.load(true);
+    releaseFirst?.([
+      { id: 'stale', filename: 'stale.scn', relative_path: '' },
+    ]);
+    await Promise.all([stale, fresh]);
+
+    expect(store.list.map((item) => item.id)).toEqual(['imported-pointe']);
+  });
+
+  it('studyList hides other networks catalogue files on GasLib-11', async () => {
+    networkStoreMock.activeNetwork = 'GasLib-11';
+    apiSpies.listNovaScenarios.mockResolvedValueOnce([
+      { id: 'g582', filename: 'GasLib-582.scn', relative_path: 'GasLib-582.scn' },
+      { id: 'g11', filename: 'GasLib-11.scn', relative_path: 'GasLib-11.scn' },
+      {
+        id: 'pointe',
+        filename: 'nomination-pointe.scn',
+        relative_path: '',
+        source: 'imported',
+      },
+    ]);
+    const store = useNominationStore();
+    await store.load();
+    expect(store.studyList.map((item) => item.filename)).toEqual(['nomination-pointe.scn']);
+    expect(apiSpies.listNovaScenarios).toHaveBeenCalledWith('GasLib-11');
+  });
+
+  it('load drops a catalogue selection that is hidden from the study picker', async () => {
+    networkStoreMock.activeNetwork = 'GasLib-11';
+    apiSpies.listNovaScenarios.mockResolvedValue([
+      { id: 'g582', filename: 'GasLib-582.scn', relative_path: 'GasLib-582.scn' },
+      {
+        id: 'pointe',
+        filename: 'nomination-pointe.scn',
+        relative_path: '',
+        source: 'imported',
+      },
+    ]);
+    const store = useNominationStore();
+    await store.load();
+    store.selectById('g582');
+    expect(store.activeId).toBe('g582');
+    await store.load(true);
+    expect(store.activeId).toBeNull();
+  });
 });

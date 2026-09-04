@@ -123,10 +123,12 @@ async function commitPipeFields() {
 </script>
 
 <style scoped>
+/* La largeur et le placement viennent de `.property-panel-slot` (app.scss) : un
+   `width: 100%` ici l'emporterait sur la classe de placement (spécificité du scope)
+   et le panneau s'étalerait sur toute la carte. */
 .property-panel {
   background: rgba(18, 18, 18, 0.92);
   border-color: rgba(120, 180, 220, 0.35);
-  width: 100%;
   box-sizing: border-box;
 }
 </style>

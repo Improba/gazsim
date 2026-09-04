@@ -15,19 +15,13 @@
             {{ subtitle }}
           </div>
         </div>
-        <q-badge
-          v-if="signatureLabel"
-          outline
-          color="grey-5"
-          class="q-ml-sm text-caption"
-          :label="signatureLabel"
-        />
       </div>
-      <template #action v-if="!verdict?.feasible && deficitSinks.length > 0">
+      <template #action v-if="showFocusAction && !verdict?.feasible && deficitSinks.length > 0">
         <q-btn
           flat
           dense
           color="white"
+          no-caps
           :label="`Voir ${deficitSinks.length} point(s) déficitaire(s)`"
           @click="$emit('focus-deficits')"
         />
@@ -38,10 +32,19 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
+import { useNominationStore } from 'src/stores/nomination';
 import { useSimulateStore } from 'src/stores/simulate';
-import { solverSignatureBadgeLabel } from 'src/utils/novaLabels';
+import { nominationDisplayLabel } from 'src/utils/demoNominations';
 
 const simulateStore = useSimulateStore();
+const nominationStore = useNominationStore();
+
+withDefaults(
+  defineProps<{
+    showFocusAction?: boolean;
+  }>(),
+  { showFocusAction: true },
+);
 
 defineEmits<{ (e: 'focus-deficits'): void }>();
 
@@ -49,17 +52,11 @@ const verdict = computed(() => simulateStore.novaVerdict);
 const deficitSinks = computed(() => verdict.value?.deficit_sinks ?? []);
 
 const visible = computed(
-  () => simulateStore.activeScenarioId !== null && verdict.value !== null,
+  () =>
+    simulateStore.activeScenarioId !== null &&
+    verdict.value !== null &&
+    !simulateStore.nominationChangedSinceLastRun,
 );
-
-const signatureLabel = computed(() => {
-  if (!verdict.value) return null;
-  const { feasible, solver_signature: sig } = verdict.value;
-  if (!feasible && sig !== 'Unresolved') {
-    return solverSignatureBadgeLabel(sig, false);
-  }
-  return solverSignatureBadgeLabel(sig, feasible);
-});
 
 const bannerClass = computed(() => {
   if (verdict.value?.feasible) return 'bg-green-9 text-green-2';
@@ -73,21 +70,27 @@ const bannerIcon = computed(() => {
   return 'error';
 });
 
+const nominationLabel = computed(() => {
+  const filename = nominationStore.activeFilename;
+  const labeled = nominationDisplayLabel(filename);
+  return labeled || simulateStore.activeScenarioId || 'nomination';
+});
+
 const title = computed(() => {
-  if (verdict.value?.feasible) return 'Scénario NoVa : tenue pression OK';
-  if (verdict.value?.cause === 'NotSolvedLocal') return 'Scénario NoVa : verdict non établi';
-  if (verdict.value?.cause === 'ScaleNotAchieved') return 'Scénario NoVa : soutirages non couverts';
-  if (verdict.value?.cause === 'PressureExcess') return 'Scénario NoVa : dépassement borne haute';
-  return 'Scénario NoVa : tenue pression non tenue';
+  if (verdict.value?.feasible) return 'Tenue pression OK';
+  if (verdict.value?.cause === 'NotSolvedLocal') return 'Verdict non établi';
+  if (verdict.value?.cause === 'ScaleNotAchieved') return 'Soutirages non couverts';
+  if (verdict.value?.cause === 'PressureExcess') return 'Dépassement borne haute';
+  return 'Tenue pression non tenue';
 });
 
 const subtitle = computed(() => {
   if (!verdict.value) return '';
   if (verdict.value.feasible) {
-    return `Aucun point de livraison sous sa borne contractuelle (${simulateStore.activeScenarioId}).`;
+    return `Aucun point de livraison sous sa borne contractuelle (${nominationLabel.value}).`;
   }
   if (verdict.value.cause === 'NotSolvedLocal') {
-    return 'Le solveur local n\'a pas convergé : la faisabilité pression n\'est pas certifiée.';
+    return "Le point de fonctionnement n'a pas pu être établi.";
   }
   if (verdict.value.cause === 'ScaleNotAchieved') {
     const scale = verdict.value.demand_scale_achieved;
@@ -95,12 +98,12 @@ const subtitle = computed(() => {
     return `Les soutirages nominaux n'ont pas été couverts (palier ${pct} %).`;
   }
   if (verdict.value.cause === 'PressureExcess') {
-    return 'Un ou plusieurs nœuds dépassent leur borne haute — voir marges par contrainte.';
+    return 'Un ou plusieurs nœuds dépassent leur borne haute. Voir les marges par contrainte.';
   }
   const cause =
     verdict.value.cause === 'PressureReachability'
-      ? 'la pression amont n\'atteint pas le besoin du point de livraison'
+      ? "la pression amont n'atteint pas le besoin du point de livraison"
       : 'un ou plusieurs points de livraison sont sous leur borne contractuelle';
-  return `${deficitSinks.value.length} point(s) en déficit — ${cause}.`;
+  return `${deficitSinks.value.length} point(s) en déficit : ${cause}.`;
 });
 </script>

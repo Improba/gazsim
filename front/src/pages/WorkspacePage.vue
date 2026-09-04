@@ -5,7 +5,7 @@
         <div class="col">
           <div class="text-h5 text-white">Espace d'analyse</div>
           <div class="text-caption text-grey-5">
-            {{ networkStore.activeNetwork ?? 'Aucun réseau' }}
+            {{ workspaceContext }}
           </div>
         </div>
         <div v-if="selectedNode" class="col-auto">
@@ -52,13 +52,6 @@
           label="Charger un réseau"
           @click="router.push({ name: 'import' })"
         />
-        <q-btn
-          flat
-          color="secondary"
-          label="Essayer la démo"
-          :loading="isLoadingDemo"
-          @click="launchDemo"
-        />
       </template>
     </q-banner>
 
@@ -71,21 +64,34 @@
       <template #avatar>
         <q-icon name="info" color="blue-grey-4" />
       </template>
-      Aucun résultat : sélectionnez une nomination ci-dessous puis validez la tenue pression.
+      Choisissez une nomination, puis validez la tenue pression.
     </q-banner>
 
     <div v-if="hasNetwork" class="workspace-page__launch q-mb-md">
-      <NominationPanel :disabled="simulateStore.loading" />
+      <NominationPanel :disabled="simulateStore.loading || isLoadingDemo" />
       <div class="row q-gutter-sm q-mt-sm">
         <q-btn
+          v-if="showDemoLaunch"
           unelevated
           color="primary"
-          :label="launchLabel"
+          label="Démo nomination"
+          icon="verified"
+          :loading="isLoadingDemo"
+          :disable="isLoadingDemo || networkStore.switching"
+          @click="onLaunchNominationDemo"
+        />
+        <q-btn
+          v-else
+          unelevated
+          color="primary"
+          label="Valider la nomination"
           icon="play_arrow"
           :loading="simulateStore.loading"
-          :disable="simulateStore.loading || networkStore.switching"
+          :disable="simulateStore.loading || networkStore.switching || !nominationStore.activeId"
           @click="onValidate"
-        />
+        >
+          <q-tooltip v-if="!nominationStore.activeId">Choisissez une nomination, puis validez.</q-tooltip>
+        </q-btn>
         <q-btn
           v-if="simulateStore.loading"
           color="negative"
@@ -95,7 +101,7 @@
         />
       </div>
       <q-banner
-        v-if="simulateStore.inputDirty && hasResult"
+        v-if="(simulateStore.inputDirty || simulateStore.hasSessionDemandOverrides) && hasResult"
         dense
         rounded
         class="bg-amber-10 text-amber-2 q-mt-sm"
@@ -103,15 +109,12 @@
         <template #avatar>
           <q-icon name="info" />
         </template>
-        <span v-if="simulateStore.scenarioDirty">Nomination modifiée — relancez pour re-valider la tenue pression.</span>
+        <span v-if="simulateStore.nominationChangedSinceLastRun">Cette nomination n'est pas encore évaluée. Validez pour comparer.</span>
+        <span v-else-if="simulateStore.scenarioDirty">Nomination modifiée. Relancez pour re-valider la tenue pression.</span>
+        <span v-else-if="simulateStore.hasSessionDemandOverrides">{{ SESSION_REDUCTION_BANNER }}</span>
         <span v-else>Soutirages ou réglages modifiés — relancez pour voir l'effet.</span>
       </q-banner>
     </div>
-
-    <NovaWorkflowStepper
-      v-if="hasNetwork && hasResult && novaWorkflowEnabled"
-      class="workspace-page__stepper q-mb-md"
-    />
 
     <div v-if="hasNetwork" class="workspace-page__body">
       <div class="workspace-page__main">
@@ -125,11 +128,11 @@
       </div>
       <aside class="workspace-page__rail">
         <ResultsRail
-          :active-section="novaWorkflowEnabled ? novaCurrentStep : null"
           @focus-deficits="onFocusDeficits"
           @select-node="onSelectNode"
           @run-study="onRunStudy"
           @reduce="onReduce"
+          @reduce-session="onReduceSession"
           @reduce-all="onReduceAll"
           @save-reduced="onSaveReduced"
         />
@@ -140,20 +143,20 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { useQuasar } from 'quasar';
 import SchematicView from 'src/components/workspace/SchematicView.vue';
 import PressureProfileView from 'src/components/workspace/PressureProfileView.vue';
 import ResultsTableView from 'src/components/workspace/ResultsTableView.vue';
-import NovaWorkflowStepper from 'src/components/workspace/NovaWorkflowStepper.vue';
 import ResultsRail from 'src/components/workspace/ResultsRail.vue';
 import NominationPanel from 'src/components/NominationPanel.vue';
 import { useDemo } from 'src/composables/useDemo';
-import { useNovaWorkflow } from 'src/composables/useNovaWorkflow';
 import { useNetworkStore } from 'src/stores/network';
 import { useNominationStore } from 'src/stores/nomination';
 import { useSimulateStore } from 'src/stores/simulate';
 import { deficitSinkIds } from 'src/utils/novaDeficitSinks';
+import { SESSION_REDUCTION_BANNER } from 'src/utils/novaLabels';
+import { nominationPickerLabel } from 'src/utils/nominationPicker';
 
 type WorkspaceView = 'schematic' | 'profile' | 'table';
 
@@ -164,24 +167,41 @@ const workspaceViews: Array<{ id: WorkspaceView; label: string }> = [
 ];
 
 const router = useRouter();
+const route = useRoute();
 const $q = useQuasar();
 const networkStore = useNetworkStore();
 const nominationStore = useNominationStore();
 const simulateStore = useSimulateStore();
 const { isLoadingDemo, launchDemo } = useDemo();
-const { enabled: novaWorkflowEnabled, currentStep: novaCurrentStep } = useNovaWorkflow();
 
 const activeView = ref<WorkspaceView>('schematic');
 const selectedNode = ref<string | null>(null);
 
 const hasNetwork = computed(() => networkStore.nodes.length > 0);
 const hasResult = computed(() => simulateStore.result !== null);
-const launchLabel = computed(() =>
-  nominationStore.activeId ? 'Valider la nomination' : 'Lancer',
+const workspaceContext = computed(() => {
+  const network = networkStore.activeNetwork ?? 'Aucun réseau';
+  const nom = nominationPickerLabel(nominationStore.activeFilename) || 'Aucune nomination';
+  return `${network} · ${nom}`;
+});
+const showDemoLaunch = computed(
+  () =>
+    isLoadingDemo.value ||
+    (!simulateStore.result && !simulateStore.loading && !nominationStore.activeId),
 );
 
 function onValidate(): void {
   void simulateStore.startValidation();
+}
+
+async function onLaunchNominationDemo(): Promise<void> {
+  const raw = route.query.run;
+  const fallbackRunId = typeof raw === 'string' ? raw : undefined;
+  try {
+    await launchDemo(fallbackRunId);
+  } catch {
+    // Erreur déjà notifiée par useDemo.
+  }
 }
 
 function onRunStudy(): void {
@@ -219,6 +239,10 @@ function onReduce(sinkId: string, maxFeasibleQ: number): void {
   void simulateStore.applySinkReduction(sinkId, maxFeasibleQ);
 }
 
+function onReduceSession(sinkId: string): void {
+  void simulateStore.applySessionSinkReduction(sinkId);
+}
+
 function onReduceAll(): void {
   void simulateStore.applyAllCapacityReductions();
 }
@@ -234,6 +258,7 @@ async function onSaveReduced(demands: Record<string, number>): Promise<void> {
   }
   try {
     await nominationStore.saveReduced(baseId, demands);
+    simulateStore.clearDemandOverrides();
   } catch {
     // Le store affiche déjà une notification négative.
   }

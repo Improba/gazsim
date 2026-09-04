@@ -60,7 +60,7 @@
             <span v-else-if="hasActiveScenario">
               Sauvegarde les débits max faisables (exits) comme une nouvelle nomination .scn
               et la sélectionne. Nomination réduite mass-balancée sur entries à débit fixe :
-              re-validez avant de certifier.
+              re-validez avant d'ouvrir le dossier d'étude.
             </span>
             <span v-else>
               Validez d'abord une nomination (simulation NoVa) pour enregistrer la version réduite.

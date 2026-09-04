@@ -4,6 +4,7 @@ import { Notify } from 'quasar';
 import { api, type NovaScenarioSummary } from 'src/services/api';
 import { useNetworkStore } from 'src/stores/network';
 import { formatApiError } from 'src/utils/importError';
+import { nominationsForStudyPicker } from 'src/utils/nominationPicker';
 
 /**
  * Objet « Nomination » first-class (Phase WS4-fin). Porte la nomination NoVa active
@@ -18,36 +19,53 @@ export const useNominationStore = defineStore('nomination', () => {
 
   const activeId = computed(() => selected.value?.id ?? null);
   const activeFilename = computed(() => selected.value?.filename ?? null);
+  const studyList = computed(() => {
+    const networkStore = useNetworkStore();
+    return nominationsForStudyPicker(list.value, networkStore.activeNetwork);
+  });
 
   let loadedForNetwork: string | null = null;
+  let loadGeneration = 0;
 
   async function load(force = false) {
     const networkStore = useNetworkStore();
     const networkId = networkStore.activeNetwork ?? null;
-    if (!force && loadedForNetwork === networkId && list.value.length >= 0) {
-      // déjà chargé pour ce réseau (même vide) : on évite le refetch intempestif.
-      if (loadedForNetwork === networkId) return;
+    if (!force && loadedForNetwork === networkId) {
+      return;
     }
+    const generation = ++loadGeneration;
     loading.value = true;
     try {
-      list.value = await api.listNovaScenarios();
+      const next = await api.listNovaScenarios(networkId ?? undefined);
+      if (generation !== loadGeneration) {
+        return;
+      }
+      list.value = next;
       loadedForNetwork = networkId;
-      // Si la nomination sélectionnée n'existe plus pour ce réseau, on désélectionne.
-      if (selected.value && !list.value.some((s) => s.id === selected.value!.id)) {
+      if (
+        selected.value &&
+        (!list.value.some((s) => s.id === selected.value!.id) ||
+          !studyList.value.some((s) => s.id === selected.value!.id))
+      ) {
         selected.value = null;
       }
     } catch (err) {
+      if (generation !== loadGeneration) {
+        return;
+      }
       list.value = [];
       Notify.create({
         type: 'negative',
         message: err instanceof Error ? err.message : 'Impossible de charger les nominations',
       });
     } finally {
-      loading.value = false;
+      if (generation === loadGeneration) {
+        loading.value = false;
+      }
     }
   }
 
-  async function importFile(file: File) {
+  async function importFile(file: File, options?: { silent?: boolean }) {
     if (!file.name.endsWith('.scn')) {
       Notify.create({ type: 'negative', message: 'Le fichier doit avoir l\'extension .scn' });
       throw new Error('invalid extension');
@@ -56,7 +74,9 @@ export const useNominationStore = defineStore('nomination', () => {
     const summary = await api.importNovaNomination({ filename: file.name, xml });
     await load(true);
     selectById(summary.id);
-    Notify.create({ type: 'positive', message: `Nomination ${file.name} importée` });
+    if (!options?.silent) {
+      Notify.create({ type: 'positive', message: `Nomination ${file.name} importée` });
+    }
     return summary;
   }
 
@@ -110,6 +130,7 @@ export const useNominationStore = defineStore('nomination', () => {
 
   return {
     list,
+    studyList,
     selected,
     loading,
     activeId,

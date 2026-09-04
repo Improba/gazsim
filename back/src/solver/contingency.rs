@@ -48,7 +48,9 @@ pub struct ContingencyResult {
     pub case: ContingencyCase,
     pub converged: bool,
     pub min_pressure_bar: f64,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Toujours sérialisé, liste vide comprise : « aucune violation » est une information
+    /// du rapport, et l'omettre a déjà fait planter les clients qui lisent `violations.length`.
+    #[serde(default)]
     pub violations: Vec<PressureViolation>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub solver_result: Option<SolverResult>,
@@ -483,5 +485,29 @@ mod tests {
         assert!(!result.violations.is_empty());
         assert_eq!(report.red_cases.len(), 1);
         assert_eq!(report.green_cases.len(), 0);
+    }
+
+    /// Un cas sans violation doit exposer `"violations": []` et non omettre le champ :
+    /// les clients lisent la longueur de la liste pour trancher vert / rouge.
+    #[test]
+    fn contingency_result_always_serialises_violations() {
+        let result = ContingencyResult {
+            case: ContingencyCase {
+                element_id: "CS01".into(),
+                element_type: ContingencyElementType::Compressor,
+                action: ContingencyAction::RemovePipe,
+            },
+            converged: false,
+            min_pressure_bar: 0.0,
+            violations: Vec::new(),
+            solver_result: None,
+        };
+
+        let json = serde_json::to_value(&result).expect("serialise");
+        assert_eq!(
+            json.get("violations"),
+            Some(&serde_json::json!([])),
+            "champ violations attendu même vide, got {json}"
+        );
     }
 }

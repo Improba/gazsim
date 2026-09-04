@@ -15,10 +15,12 @@
     <SimulationResultsBlock
       :active-section="props.activeSection"
       :show-solver-details="false"
+      compact-first-fold
       @focus-deficits="emit('focus-deficits')"
       @select-node="(id) => emit('select-node', id)"
       @run-study="emit('run-study')"
       @reduce="(sinkId, maxFeasibleQ) => emit('reduce', sinkId, maxFeasibleQ)"
+      @reduce-session="(sinkId) => emit('reduce-session', sinkId)"
       @reduce-all="emit('reduce-all')"
       @save-reduced="(demands) => emit('save-reduced', demands)"
     >
@@ -49,6 +51,7 @@ const emit = defineEmits<{
   (e: 'select-node', nodeId: string): void;
   (e: 'run-study'): void;
   (e: 'reduce', sinkId: string, maxFeasibleQ: number): void;
+  (e: 'reduce-session', sinkId: string): void;
   (e: 'reduce-all'): void;
   (e: 'save-reduced', demands: Record<string, number>): void;
 }>();

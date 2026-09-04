@@ -33,6 +33,15 @@ describe('labelLodVisible', () => {
     expect(labelLodVisible(1_000_000, 20, baseContext)).toBe(true);
   });
 
+  it('always shows a NoVa deficit label, even zoomed out', () => {
+    expect(
+      labelLodVisible(10_000_000, 200, {
+        ...baseContext,
+        isNovaDeficit: true,
+      }),
+    ).toBe(true);
+  });
+
   it('does not treat pipe selection as node label selection', () => {
     expect(
       labelLodVisible(10_000_000, 20, {

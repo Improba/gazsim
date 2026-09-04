@@ -103,6 +103,17 @@ describe('useAlertCenter', () => {
     expect(alerts.value.every((alert) => alert.id.startsWith('warning:'))).toBe(true);
   });
 
+  it('rewrites the IPOPT point warning in alert bodies', () => {
+    const simulateStore = useSimulateStore();
+    simulateStore.warnings = ['Point établi par IPOPT (modèle in-repo).'];
+
+    const { alerts } = useAlertCenter();
+
+    expect(alerts.value).toHaveLength(1);
+    expect(alerts.value[0].body).toBe('Point établi (renforcé).');
+    expect(alerts.value[0].body).not.toContain('IPOPT');
+  });
+
   it('creates a partial convergence alert from demand scale', () => {
     const simulateStore = useSimulateStore();
     simulateStore.result = simulationResult({ demand_scale_achieved: 0.72 });

@@ -15,6 +15,7 @@ import { needsCapacityReduction } from 'src/utils/sinkCapacity';
 import { presetForNodeCount, presetRobust } from 'src/utils/solverPresets';
 import { useNetworkStore } from 'src/stores/network';
 import { useNominationStore } from 'src/stores/nomination';
+import { nominationDisplayLabel } from 'src/utils/demoNominations';
 
 type SimulationStatus = 'idle' | 'running' | 'converged' | 'cancelled' | 'error';
 
@@ -26,6 +27,14 @@ export type RunScenarioSummary = {
   hour?: number;
   dayType?: 'weekday' | 'weekend';
 };
+
+/** Trace d'un verdict obtenu pendant la session, attaché à une nomination. */
+export interface SessionVerdict {
+  feasible: boolean;
+  deficitSinks: string[];
+  runId: string | null;
+  at: number;
+}
 
 type LastRunParams = {
   demands?: Record<string, number>;
@@ -137,6 +146,43 @@ export const useSimulateStore = defineStore('simulate', () => {
   const inputDirty = computed(
     () => demandsDirty.value || equipmentDirty.value || scenarioDirty.value,
   );
+
+  /** La nomination affichée n'est plus celle du dernier verdict. */
+  const nominationChangedSinceLastRun = computed(() => {
+    const nominationStore = useNominationStore();
+    return lastRunScenarioId.value != null && nominationStore.activeId !== lastRunScenarioId.value;
+  });
+
+  /**
+   * Verdicts obtenus dans la session, par nomination. Permet de dire quelle nomination
+   * reste à évaluer sans relancer un calcul, et disparaît au changement de réseau
+   * (`resetSimulation`) puisque les verdicts ne s'appliquent plus au nouveau périmètre.
+   */
+  const sessionVerdicts = ref<Record<string, SessionVerdict>>({});
+
+  function recordSessionVerdict(): void {
+    const scenarioId = lastRunScenarioId.value;
+    const verdict = novaVerdict.value;
+    if (!scenarioId || !verdict) {
+      return;
+    }
+    sessionVerdicts.value = {
+      ...sessionVerdicts.value,
+      [scenarioId]: {
+        feasible: verdict.feasible,
+        deficitSinks: [...(verdict.deficit_sinks ?? [])],
+        runId: currentRunId.value,
+        at: Date.now(),
+      },
+    };
+  }
+
+  function sessionVerdictFor(scenarioId: string | null | undefined): SessionVerdict | null {
+    if (!scenarioId) {
+      return null;
+    }
+    return sessionVerdicts.value[scenarioId] ?? null;
+  }
 
   async function ensureConnectedWs() {
     if (!wsClient) {
@@ -297,12 +343,23 @@ export const useSimulateStore = defineStore('simulate', () => {
     return bounds;
   }
 
+  const hasSessionDemandOverrides = computed(
+    () => Object.keys(demandOverrides.value).length > 0,
+  );
+
   /** Lance une validation avec la nomination active et les overrides partagés. */
   async function startValidation() {
     if (loading.value) {
       return;
     }
     const nominationStore = useNominationStore();
+    if (!nominationStore.activeId) {
+      Notify.create({
+        type: 'warning',
+        message: 'Sélectionnez une nomination à valider.',
+      });
+      return;
+    }
     const networkStore = useNetworkStore();
     const demands =
       Object.keys(demandOverrides.value).length > 0 ? { ...demandOverrides.value } : undefined;
@@ -311,26 +368,38 @@ export const useSimulateStore = defineStore('simulate', () => {
     if (composition) {
       opts.gas_composition = { ...composition };
     }
-    if (nominationStore.activeId) {
-      opts.scenario_id = nominationStore.activeId;
-    }
+    opts.scenario_id = nominationStore.activeId;
     if (simulationMode.value !== 'free') {
       opts.mode = simulationMode.value;
       opts.capacity_bounds = buildCapacityBounds();
     }
     const filename = nominationStore.activeFilename;
-    setRunScenarioSummary(
-      filename
-        ? { description: `Nomination ${filename}` }
-        : demands
-          ? { description: 'Soutirages manuels' }
-          : { description: 'Régime nominal du réseau' },
-    );
+    setRunScenarioSummary({
+      description: filename ? nominationDisplayLabel(filename) : 'Nomination',
+    });
     const equipment =
       Object.keys(equipmentOverrides.value).length > 0
         ? { ...equipmentOverrides.value }
         : undefined;
     await runSimulation(demands, opts, equipment);
+  }
+
+  /**
+   * Bascule vers une autre nomination puis la valide en un geste. Les réductions de
+   * session portaient sur la nomination précédente : elles sont écartées pour ne pas
+   * fausser le verdict de la nouvelle.
+   */
+  async function validateNomination(scenarioId: string) {
+    const trimmed = scenarioId.trim();
+    if (!trimmed || loading.value) {
+      return;
+    }
+    const nominationStore = useNominationStore();
+    if (trimmed !== nominationStore.activeId) {
+      clearDemandOverrides();
+    }
+    nominationStore.selectById(trimmed);
+    await startValidation();
   }
 
   /** Réduit un sink au Q max faisable puis re-valide (carte et espace d'analyse). */
@@ -369,6 +438,25 @@ export const useSimulateStore = defineStore('simulate', () => {
     await startValidation();
   }
 
+  /** Réduit un sink en session (moitié du Q connu, sinon coupure) puis re-valide. */
+  async function applySessionSinkReduction(sinkId: string) {
+    if (loading.value) {
+      return;
+    }
+    const previous =
+      demandOverrides.value[sinkId] ??
+      lastInputDemands()?.[sinkId] ??
+      adjustedDemands.value[sinkId];
+    const nextMagnitude =
+      previous !== undefined && Number.isFinite(previous) ? Math.abs(previous) * 0.5 : 0;
+    demandOverrides.value = {
+      ...(lastInputDemands() ?? {}),
+      ...demandOverrides.value,
+      [sinkId]: toSinkOverrideFlow(nextMagnitude),
+    };
+    await startValidation();
+  }
+
   function setRunScenarioSummary(summary: RunScenarioSummary | null) {
     runScenarioSummary.value = summary;
   }
@@ -380,7 +468,7 @@ export const useSimulateStore = defineStore('simulate', () => {
   async function runSinkCapacity(sinkIds?: string[]) {
     const scenarioId = activeScenarioId.value;
     if (!scenarioId) {
-      capacityError.value = "Aucun scénario NoVa actif — sélectionnez une nomination.";
+      capacityError.value = 'Aucune nomination active — sélectionnez une nomination.';
       return;
     }
 
@@ -492,6 +580,7 @@ export const useSimulateStore = defineStore('simulate', () => {
           boundarySupply.value = merged.boundary_supply ?? [];
           sinkDiagnostics.value = merged.sink_diagnostics ?? [];
           novaVerdict.value = merged.nova_verdict ?? null;
+          recordSessionVerdict();
           const scaleAchieved = merged.demand_scale_achieved;
           if (scaleAchieved !== undefined && scaleAchieved < 1) {
             addLog(
@@ -617,6 +706,7 @@ export const useSimulateStore = defineStore('simulate', () => {
     capacityError.value = null;
     currentRunId.value = null;
     lastRunParams.value = null;
+    sessionVerdicts.value = {};
     clearInputOverrides();
     simulationMode.value = 'free';
   }
@@ -631,7 +721,6 @@ export const useSimulateStore = defineStore('simulate', () => {
     lastRunScenarioId.value = applied.scenario_id;
     activeScenarioId.value = applied.scenario_id;
     currentRunId.value = applied.run_id;
-    status.value = 'converged';
     loading.value = false;
     errorMessage.value = null;
     iteration.value = applied.iterations;
@@ -642,6 +731,7 @@ export const useSimulateStore = defineStore('simulate', () => {
     boundarySupply.value = applied.boundary_supply ?? [];
     sinkDiagnostics.value = applied.sink_diagnostics ?? [];
     novaVerdict.value = applied.nova_verdict ?? null;
+    recordSessionVerdict();
     livePressures.value = { ...applied.pressures };
     liveFlows.value = { ...applied.flows };
     result.value = {
@@ -657,6 +747,7 @@ export const useSimulateStore = defineStore('simulate', () => {
       sink_diagnostics: applied.sink_diagnostics,
       nova_verdict: applied.nova_verdict ?? undefined,
     };
+    status.value = 'converged';
     addLog(`run ${applied.run_id} chargé`);
   }
 
@@ -745,16 +836,22 @@ export const useSimulateStore = defineStore('simulate', () => {
     lastRunScenarioId,
     scenarioStale,
     scenarioDirty,
+    nominationChangedSinceLastRun,
+    sessionVerdicts,
+    sessionVerdictFor,
     demandsDirty,
     equipmentDirty,
     inputDirty,
     demandOverrides,
+    hasSessionDemandOverrides,
     equipmentOverrides,
     simulationMode,
     clearInputOverrides,
     clearDemandOverrides,
     startValidation,
+    validateNomination,
     applySinkReduction,
+    applySessionSinkReduction,
     applyAllCapacityReductions,
     setRunScenarioSummary,
     setPreviewStep,

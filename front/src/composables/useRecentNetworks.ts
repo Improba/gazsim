@@ -2,7 +2,7 @@ import { ref, watch } from 'vue';
 
 const STORAGE_KEY = 'gazflow.recentNetworks';
 const MAX_RECENT = 6;
-const SEED: readonly string[] = ['GasLib-11', 'GasLib-582'];
+const SEED: readonly string[] = ['GasLib-11'];
 
 function readFromStorage(): string[] {
   try {

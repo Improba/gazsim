@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { presetForNodeCount, presetRobust, tierForNodeCount } from './solverPresets';
+import {
+  networkTierLabel,
+  presetForNodeCount,
+  presetRobust,
+  tierForNodeCount,
+} from './solverPresets';
 
 describe('solverPresets', () => {
   it('classifies GasLib-11 as demo', () => {
@@ -18,5 +23,15 @@ describe('solverPresets', () => {
     const p = presetRobust(20);
     expect(p.robust_mode).toBe(true);
     expect(p.continuation_scales?.length).toBeGreaterThan(1);
+  });
+
+  // Les paliers viennent de l'API en snake_case (`NetworkTier` sérialisé par serde) :
+  // une valeur non couverte renverrait `undefined` dans l'UI.
+  it('labels every tier sent by the backend', () => {
+    expect(networkTierLabel('demo')).toBe('Démo');
+    expect(networkTierLabel('standard')).toBe('Standard');
+    expect(networkTierLabel('large')).toBe('Transport');
+    expect(networkTierLabel('x_large')).toBe('Très grand');
+    expect(networkTierLabel(tierForNodeCount(4197))).toBe('Très grand');
   });
 });

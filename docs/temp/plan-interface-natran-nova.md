@@ -1,6 +1,6 @@
 # Plan d'implémentation — Interface NoVa pour ingénieur Natran
 
-> **Note (août 2026)** : l'audit §1 est **historique** (état avant implémentation). L'état réel du livré est en **§16** (Second Increment), **§17** (post-Second Increment) et **§18** (chaîne unifiée carte / Espace d'analyse).
+> **Note (septembre 2026)** : l'audit §1 est **historique** (état avant implémentation). Livré : **§16** (Second Increment), **§17** (post-Second Increment), **§18** (chaîne unifiée carte / Espace d'analyse), **§19** (study-first + démo jour/pointe, 4 sept. 2026).
 
 **Date** : juillet 2026
 **Cible** : rendre GazFlow opérationnel pour Camille, ingénieure d'études réseau (GRT gaz) dont la mission quotidienne est la **validation de nominations** (NoVa) et l'analyse N-1.
@@ -433,7 +433,7 @@ Le plan qualifiait WS0 de « pur surfacing ». **Gap de cohérence trouvé** : l
 
 ### Statut WS5 / WS6 (Second Increment — suite, juillet 2026)
 
-- **WS5** : stepper NoVa Verdict → Causes → Capacité → Export (carte et Espace d'analyse) ; nav gauche **workflows** (Valider / N-1 / Calage / Transitoire) vs **outils** (Espace d'analyse, import, exports, batch).
+- **WS5** (historique, juillet 2026) : stepper NoVa Verdict → Causes → Capacité → Export ; nav **workflows** vs **outils**. **Supersédé en septembre 2026** : voir §19.
 - **WS6 partiel** : vocabulaire métier NoVa dans l'Espace d'analyse et la carte (`novaLabels`, nomination, soutirages, réglages équipements) ; jargon solveur possible sur calage / transitoire.
 
 **WS7 — Rapport de certification** ✅
@@ -485,4 +485,19 @@ Cycles review/correction (interface + workflow, **pas** le Newton GasLib-582) :
 - **Détails techniques** (582 P/Q) repliés sous NoVa ; lancement via « Valider la nomination ».
 
 **Limite scientifique inchangée** : `NotSolvedLocal` sur `mild_618` avec le Newton in-repo n'est pas un bug UI (voir `docs/science/limitations.md` §2.2). L'étude `/api/nova/capacity` lit le `.scn` fichier, pas les overrides de session.
+
+---
+
+## 19. Study-first + démo jour/pointe (septembre 2026)
+
+Livré sur `main` (`4939339`, `feat(demo): parcours tenue pression jour/pointe pour la réunion Natran`). Refactor d'interface, pas un changement de modèle hydraulique.
+
+- **Nav** : deux entrées d'étude (**Tableau de bord**, **Tenue pression**). N-1, calage, transitoire, Espace d'analyse, import, exports, batch sous **Outils**.
+- **StudyContextBar** remplace `GlobalStatusBar` : fil `réseau → nomination → tenue [→ N-1]` + question d'étude. Changement de réseau : confirmation si un verdict est en session (`useNetworkSwitch`).
+- **Tableau de bord** : landing **Étude** (CTA démo / charger un réseau, puis verdict). Plus de cartes KPI. `useOperationalKpis` n'est plus monté.
+- **Carte** : surface principale. Pas de redirection si vide. Coloration **écart à la borne contractuelle** (`contractMarginColor`). Cause compacte + `MapCauseCard` sur un point de livraison sélectionné.
+- **Démo** : GasLib-11 ; XML in-session `nomination-jour.scn` (20–70 barg sur `exit01`) et `nomination-pointe.scn` (68–72 barg) ; **mêmes débits** entry/exit. La démo sélectionne la pointe, lance Valider, ouvre `/map`.
+- **Suites** : `StudyNextSteps` à poids égal (autre nomination, N-1, dossier d'étude). Le stepper NoVa n'est plus monté (`NovaWorkflowStepper.vue` orphelin).
+- **Deep link** : `?run=<id>` hydrate un run NoVa (Workproba).
+- Le **test Camille** mild_618 (§9 persona) reste le parcours puissance / 582. La démo réunion est GasLib-11.
 

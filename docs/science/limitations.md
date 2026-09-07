@@ -50,7 +50,9 @@ This document describes the known limits of the solver in its current state. It 
 ## 2.2 NoVa product path (UI / API)
 
 - **Solve with `scenario_id`** uses `resolve_simulation_demands`: nominal Q from the `.scn` plus partial client overrides merged before the WS solve. An explicit **`0` shut-off is kept** (`HashMap::insert`); it is not treated as “use scenario Q”.
-- **UI validation chain** (Map and Workspace): shared `demandOverrides` / `startValidation` / `applySinkReduction`. Re-validating the **same** nomination keeps the capacity table so Camille can save the reduced `.scn` after Reduce. Changing nomination or a full reset clears the table.
+- **UI validation chain** (Tenue pression `/map` and Workspace): shared `demandOverrides` / `startValidation` / `applySinkReduction`. Re-validating the **same** nomination keeps the capacity table so Camille can save the reduced `.scn` after Reduce. Changing nomination or a full reset clears the table.
+- **Study-first chrome** (sept. 2026): `StudyContextBar` (network → nomination → holding), not a KPI / global status bar. After a current verdict, `StudyNextSteps` (other nomination, N-1, study dossier) at equal weight. The NoVa stepper component is not mounted.
+- **Demo nominations**: in-session GasLib-11 XML (`demoNominations.ts`), not the GasLib archive. Jour and pointe share the same entry/exit flows; pointe tightens `exit01` to 68–72 barg. The demo selects pointe and runs validation.
 - **Capacity study** (`POST /api/nova/capacity`) reads the **registered `.scn`**, not in-session slider overrides. To study a reduced case, save the reduced nomination first. A sink with nominal Q ≈ 0 is vacuously feasible (`feasible_fraction = 1`, not a reduction target).
 - **N-1 gate**: `scenarioStale` (active nomination ≠ last validated `scenario_id`), including before the first run. Dirty **banners** use `scenarioDirty` (false until a run exists).
 - **Pressure diagnostics** are post-hoc envelope checks on the converged result (except capacity study and N-1, which use `network_with_scenario_boundaries_for_nova`).

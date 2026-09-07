@@ -7,39 +7,48 @@ Natural gas network flow simulator, inspired by SIMONE.
 <table>
   <tr>
     <td align="center" width="50%">
-      <img src="docs/assets/dashboard-overview.png" alt="GazFlow operational dashboard (overview-first landing)" />
+      <img src="docs/assets/map-3d-results.png" alt="GazFlow Tenue pression: 3D map coloured by contract margin" />
     </td>
     <td align="center" width="50%">
       <img src="docs/assets/workspace-schematic.png" alt="GazFlow analysis workspace: 2D nodal schematic with load colours" />
     </td>
   </tr>
   <tr>
-    <td align="center"><em>Operational dashboard</em></td>
+    <td align="center"><em>Tenue pression (map)</em></td>
     <td align="center"><em>Workspace: 2D schematic</em></td>
   </tr>
   <tr>
     <td align="center" width="50%">
       <img src="docs/assets/workspace-pressure-profile.png" alt="GazFlow analysis workspace: pressure profile along a path" />
     </td>
-    <td align="center" width="50%">
-      <img src="docs/assets/map-3d-results.png" alt="GazFlow 3D map with simulation results overlay" />
-    </td>
   </tr>
   <tr>
     <td align="center"><em>Workspace: pressure profile</em></td>
-    <td align="center"><em>3D map with results</em></td>
   </tr>
 </table>
 
-## Interface: overview-first
+## Interface: study-first
 
-The UI is organised around an **operational overview before deep analysis**:
+The UI is organised around a **pressure-holding study** (tenue pression / NoVa), not an operational KPI dashboard.
 
-- **Tableau de bord** (`/`) — landing page. Aggregates operational KPIs (min pressure, capacity margin, demand served, N-1 compliance), an alert center (capacity violations, sink diagnostics, solver warnings, N-1 alerts), recent networks, and contextual CTAs.
-- **Espace d'analyse** (`/workspace`) — multi-view analytical workspace with a segmented switcher between a **2D nodal schematic** (pipe load colours, node pressures), a **pressure profile** along a path, and a **results table** (nodes + pipes), side-by-side with a **results rail** (verdict, sink diagnostics, boundary supply, capacity study, exports). The **ResultsRail** hosts the NoVa workflow stepper (Verdict → Causes → Capacity → Export).
-- **Carte** (`/map`) — Cesium 3D geospatial view with the **SimulationPanel** (same NoVa stepper and certification flow), property panel, and legend. When no network is loaded it redirects to the dashboard.
-- **Global status bar** — a persistent bar (network, run status, nomination, N-1 compliance) shared across all pages.
-- **Task-oriented navigation** — workflows (Validate nomination, N-1, SCADA calibration, Transient) separate from tools (Workspace, Import, Exports, Batch).
+- **Tableau de bord** (`/`) is the study landing (page title **Étude**). With no network: **Démo nomination** or load a network. After a NoVa run: verdict card and a link to the map. Optional alert center and recent networks. There are no KPI cards.
+- **Tenue pression** (`/map`) is the primary study surface: Cesium 3D map coloured by **contract margin**, `SimulationPanel` (nomination, validate, compact cause, capacity, export), and `MapCauseCard` on a selected delivery point. An empty map stays on `/map` (it does not redirect).
+- **Study context bar** (under the header, every page): trail `network → nomination → holding [→ N-1]` plus the study question. It replaces the former global status bar.
+- **Navigation**: two study entries (Tableau de bord, Tenue pression). N-1, SCADA calibration, Transient, Workspace, Import, Exports, and Batch live under **Outils**.
+- **Espace d'analyse** (`/workspace`, under Outils): 2D nodal schematic, pressure profile, or results table, next to a results rail that shares the same validation chain as the map.
+
+After a current NoVa verdict, **StudyNextSteps** proposes three equal-weight follow-ups: validate the other nomination, run N-1 on this one, or export the study dossier. The old NoVa stepper (Verdict → Causes → Capacity → Export) is not mounted.
+
+### Built-in demo (GasLib-11)
+
+**Démo nomination** (dashboard, map empty state, or study panels) loads **GasLib-11** and two Improba `.scn` files generated in the session (not files from the GasLib archive):
+
+| Nomination | Entry/exit flows | `exit01` pressure bound | Expected |
+| --- | --- | --- | --- |
+| Nomination du jour | identical | 20–70 barg | Holds |
+| Nomination de pointe | identical | 68–72 barg | Deficit after line drop |
+
+The demo selects **pointe** and runs validation, then opens the map. Do not describe pointe as “higher demand”: only the contractual pressure bound changes.
 
 ## What GazFlow does (business vision)
 
@@ -50,7 +59,7 @@ The tool computes hydraulic operating points (nodal pressures, pipe flows in Nm�
 ### Use cases
 
 - Study hydraulic behaviour under different withdrawal/injection levels and gas compositions (G20, H₂ blends with auto PR-78 above 20 % H₂)
-- **Validate transport nominations (NoVa)**: Map and Workspace share one chain (verdict, deficit causes, per-sink capacity, reduce and re-validate, save reduced `.scn`, N-1 on the last validated nomination, certification report). HTTP `POST /api/nova/validate` returns a compact verdict plus `run_id` (no nodal P/Q maps). Workproba and the map can share that run (`GET /api/nova/runs/{id}`, `?run=`).
+- **Validate transport nominations (NoVa)**: Tenue pression (`/map`) and Workspace share one chain (verdict, deficit causes, per-sink capacity, reduce and re-validate, save reduced `.scn`, N-1 on the last validated nomination, study dossier). HTTP `POST /api/nova/validate` returns a compact verdict plus `run_id` (no nodal P/Q maps). Workproba and the map can share that run (`GET /api/nova/runs/{id}`, `?run=`). The built-in **Démo nomination** (GasLib-11, jour / pointe) is the short path for a first look.
 - Import a network from **GeoJSON, CSV + YAML mapping, or Shapefile** and run operational scenarios
 - **24 h timeseries** with thermosensitive demand profiles, weather CSV, weekday/weekend curves
 - **N-1 security analysis** with parallel contingency runs, map overlay, Excel/CSV export
@@ -79,7 +88,7 @@ For the algorithm and limitations in depth, see [Capacity constraints plan](docs
 ## Architecture
 
 - **back/** — Rust backend: computation engine (Darcy-Weisbach, Newton-Raphson) + REST API (Axum)
-- **front/** — Vue 3 / QuasarJS / CesiumJS frontend: overview-first dashboard, multi-view analysis workspace, and 3D geospatial visualisation
+- **front/** — Vue 3 / QuasarJS / CesiumJS frontend: study-first UI (tenue pression on the map), analysis workspace, and 3D geospatial visualisation
 - **docker/** — Dockerfiles for back and front services
 - **docs/** — Documentation (architecture, science, plans)
 
@@ -164,6 +173,7 @@ See [LICENSING.md](LICENSING.md) and [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.
 - [Architecture](docs/architecture/overview.md)
 - [Results export contract](docs/architecture/export-contract.md)
 - [API stub (OpenAPI)](docs/contracts/openapi-stub.yaml)
+- [Science (index)](docs/science/README.md)
 - [Physical equations](docs/science/equations.md)
 - [Model limitations](docs/science/limitations.md)
 - [Testing & validation](docs/testing/README.md)
@@ -177,5 +187,5 @@ See [LICENSING.md](LICENSING.md) and [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.
 - [Implementation plan (shared)](docs/plans/implementation-plan.md)
 - [MVP features](docs/features/mvp.md)
 - [NoVa persona (Camille)](docs/personas/ingenieur-natran.md)
-- [NoVa interface plan](docs/temp/plan-interface-natran-nova.md)
+- [NoVa interface plan](docs/temp/plan-interface-natran-nova.md) (§19 = study-first / démo sept. 2026)
 

@@ -1,6 +1,6 @@
 # Implementation plan — GazFlow MVP
 
-> Convention note: local working version of plans is in `docs/temps/plans/` (unversioned). `docs/plans/` is for shared plans.
+> Convention note: local drafts live in `docs/temp/` (new files unversioned). `docs/plans/` is for shared plans.
 
 ## Objective
 

@@ -4,13 +4,14 @@ This file defines contribution rules for agents/assistants only. Detailed execut
 
 ## Sources of truth
 
-- Setup and scripts: `README.md`
+- Setup, scripts, and current UI (study-first / demo jour–pointe): `README.md`
 - Test execution: `docs/testing/README.md`
 - Operational test corpus (P6–P13): `docs/testing/corpus/README.md`
+- Science index: `docs/science/README.md`
 - Scientific validation protocol and thresholds: `docs/science/validation.md`
 - Validation pack script (T1–T16): `scripts/validation-pack.sh`
 - Project priorities and detailed scientific protocol (shared): `docs/plans/implementation-plan.md`
-- Local unversioned plans/drafts: `docs/temps/`
+- Local unversioned plans/drafts: `docs/temp/` (`docs/temp/.gitignore` ignores new files; already-tracked plans such as `plan-interface-natran-nova.md` stay in git)
 - Physical model / equations: `docs/science/equations.md`
 
 ## Contribution rules
@@ -21,7 +22,8 @@ This file defines contribution rules for agents/assistants only. Detailed execut
 4. **If physical logic is modified**: update the scientific documentation (`docs/science/equations.md`, `docs/science/validation.md` if thresholds change, `docs/science/limitations.md` if scope/limits change) and related tests.
 5. **If plan tasks are impacted**: update the status in `docs/plans/implementation-plan.md`.
 6. **Never version GasLib data** in `back/dat/`.
-7. **Temporary plan files**: use `docs/temps/` (content ignored by git).
+7. **Temporary plan files**: use `docs/temp/` (new files ignored by git unless already tracked).
+8. **If the study UI or demo path changes**: update `README.md` (Interface), `docs/quickstart.md`, `docs/personas/ingenieur-natran.md` §8, and `docs/science/limitations.md` §2.2.
 
 ## Minimal technical conventions
 

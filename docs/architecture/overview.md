@@ -155,15 +155,21 @@ Multiple WebSocket clients can run simulations at the same time with different d
 
 | Component | Responsibility |
 |-----------|----------------|
-| `CesiumViewer` | 3D globe, live colour updates on each WS snapshot |
-| `SimulationPanel` | Start/stop, final pressures and flows |
-| `LogPanel` | Scrollable iteration stream (iter, residual, time) |
-| `ProgressBar` | Progress bar + current residual |
-| `DemandControls` | Demand sliders per sink node |
-| `Legend` | Colour gradient (pressure or flow) |
+| `StudyContextBar` | Persistent study trail: network → nomination → holding [→ N-1], plus the study question |
+| `DashboardPage` | Study landing (`/`, title **Étude**): demo CTA, post-run verdict, recent networks |
+| `CesiumViewer` | 3D globe; after NoVa, colour by **contract margin** (else pressure / flow) |
+| `SimulationPanel` | Nomination, validate, compact cause, capacity, export (Tenue pression `/map`) |
+| `MapCauseCard` | Cause on a selected delivery point that misses its contractual bound |
+| `StudyNextSteps` | Equal-weight follow-ups after a verdict (other nomination, N-1, study dossier) |
+| `NominationPanel` | `.scn` selection, including the jour / pointe demo pair on GasLib-11 |
+| `ResultsRail` | Workspace counterpart of the map panel (same validation chain) |
+| `ProgressBar` | Progress + current residual (solver detail, collapsed by default on the NoVa path) |
+| `DemandControls` | Demand sliders per sink (overrides on top of the active `.scn`) |
+| `Legend` | Colour scale (contract margin, pressure, or flow) |
 | `ws` service | WebSocket connection, auto-reconnect |
 | `network` store | Network topology (REST) |
-| `simulate` store | Simulation state (WS: progress + result) |
+| `simulate` store | Simulation / NoVa state (WS + optional `?run=` hydration) |
+| `nomination` store | Active `.scn` and imported demo nominations |
 
 ---
 

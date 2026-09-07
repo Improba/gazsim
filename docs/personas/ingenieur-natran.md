@@ -2,7 +2,7 @@
 
 **Nom** : Camille Reynaud
 **Rôle** : Ingénieure d'études réseau, opérateur GRT gaz (transport)
-**Date** : juillet 2026
+**Date** : septembre 2026 (parcours étude / démo jour–pointe). Le test Camille mild_618 (§9) date de juillet 2026.
 **Usage** : ancrer les décisions UX/UI de GazFlow sur un cas d'usage métier réel (validation de nominations — NoVa).
 
 ---
@@ -64,10 +64,16 @@ Camille **valide les nominations** des expéditeurs (shippers) contre la capacit
 
 ## 8. Frustrations actuelles avec GazFlow
 
-### État produit (août 2026)
+### État produit (septembre 2026)
 
-Le parcours NoVa Camille est livré sur `main` :
+Le parcours NoVa Camille est livré sur `main`, recentré **étude de tenue pression** :
 
+- **Nav** : deux entrées d'étude (**Tableau de bord**, **Tenue pression**). N-1, calage SCADA, transitoire, Espace d'analyse, import, exports, batch sont sous **Outils**.
+- **StudyContextBar** : fil `réseau → nomination → tenue [→ N-1]` et la question d'étude (plus de barre de statut KPI).
+- **Tableau de bord** (`/`, titre **Étude**) : CTA **Démo nomination** / charger un réseau, puis carte de verdict. Pas de cartes KPI.
+- **Tenue pression** (`/map`) : surface principale. Coloration **écart à la borne contractuelle**, cause compacte, `MapCauseCard` sur un point de livraison sélectionné. Carte vide : on reste sur `/map`.
+- **Démo GasLib-11** : **Nomination du jour** (bornes 20–70 barg) et **Nomination de pointe** (68–72 barg sur `exit01`), **mêmes débits**. La démo sélectionne la pointe et lance Valider.
+- **Suites après verdict** : `StudyNextSteps` à poids égal (valider l'autre nomination, N-1, dossier d'étude). Le stepper Verdict → Causes → Capacité → Export n'est plus monté.
 - **Verdict** explicite (faisable / non faisable / verdict non établi) avec cause actionnable et signature moteur.
 - **Nomination** first-class : sélection `.scn`, panneau dédié, import et comparaison.
 - **Chaîne unique** carte / Espace d'analyse : `Valider la nomination`, soutirages partagés, réduction capacité, re-validation.
@@ -75,10 +81,8 @@ Le parcours NoVa Camille est livré sur `main` :
 - **Capacité par sink** : étude opt-in, réduction par sink ou globale, re-validation **sans perdre la table** (même nomination) ; enregistrer la version réduite ensuite.
 - **Enregistrer nomination réduite** : `POST /api/nova/nominations/reduced` (entries mass-balance à débit fixe).
 - **N-1** : CTA et page d'analyse exigent que la nomination active soit celle du dernier run validé.
-- **Rapport de certification** exportable (impression / PDF / JSON).
+- **Dossier d'étude** exportable (impression / PDF / JSON). C'est un dossier d'étude, pas un agrément.
 - **Vocabulaire métier** NoVa (nomination, soutirages, réglages équipements, écart de convergence).
-- **Stepper** Verdict → Causes → Capacité → Export (carte et Espace d'analyse).
-- **Nav** : workflows (Valider / N-1 / Calage / Transitoire) séparés des outils (Espace d'analyse, import, exports, batch).
 
 ### Limites restantes
 
@@ -92,6 +96,8 @@ Le parcours NoVa Camille est livré sur `main` :
 > « Je charge mild_618 → je vois ⛔ Non faisable avec 4 sinks en déficit → je clique sink_88 → je vois max_up 2,64 bar vs besoin 26,0 → je lance l'étude capacité → je clique "Appliquer la capacité max partout" → je re-valide (la table capacité reste) → j'enregistre la nomination réduite → je relance Valider → je lance l'analyse N-1 sur cette nomination → j'exporte le rapport de certification. »
 >
 > **Sans jamais ouvrir un JSON, ni scroller une liste de 582 pressions, ni lire le mot "résidu".**
+>
+> La **démo réunion** (GasLib-11, jour / pointe) est le parcours court pour une salle. Le test Camille ci-dessus reste le parcours puissance sur transport 582.
 
 ## 10. Citation représentative
 
